@@ -33,7 +33,6 @@ Final Answer: <面向用户的完整最终答案，使用用户使用的语言>
 
 ## 规则
 - 不要编造工具名称或 Observation；Observation 由系统在你输出 Action 后自动追加。
-- 一次只输出一个 Action（或一个 Final Answer），不要在同一个回复里续写 Observation 或第二个结论。
 - Action Input 必须是合法 JSON。
 - 若某工具返回错误，在下一步 Thought 中分析并决定是否换工具或向用户说明限制。
 """
@@ -177,7 +176,6 @@ class ReActAgent:
         trace_cb = context.get("trace_callback")
         tool_names: list[str] = list(context.get("tool_names") or [])
         extra_system = str(context.get("extra_system", ""))
-        tool_catalog = str(context.get("tool_catalog") or "")
 
         steps: list[dict[str, Any]] = []
         history_lines: list[str] = []
@@ -192,7 +190,9 @@ class ReActAgent:
         mem_block = "\n".join(f"- {s}" for s in mem_snippets) if mem_snippets else "（无）"
 
         for step_idx in range(self.max_steps):
-            tool_desc = tool_catalog or self._tool_catalog_text(tool_names)
+            tool_desc = str(context.get("tool_descriptions") or "") or self._tool_catalog_text(
+                tool_names
+            )
             history_block = "\n".join(history_lines) if history_lines else "（尚无）"
             user_prompt = build_react_user_prompt(query, tool_desc, history_block)
             messages: list[dict[str, str]] = [
@@ -210,10 +210,10 @@ class ReActAgent:
             except Exception as e:  # noqa: BLE001
                 err = f"LLM 调用失败: {e}"
                 logger.exception(err)
-                rec = {"step": step_idx, "phase": "llm", "error": err}
-                steps.append(rec)
+                err_rec = {"step": step_idx, "phase": "llm", "error": err}
+                steps.append(err_rec)
                 if trace_cb:
-                    await trace_cb(rec)
+                    await trace_cb(err_rec)
                 return AgentResult(
                     success=False,
                     final_answer="",
@@ -221,8 +221,6 @@ class ReActAgent:
                     error=err,
                 )
 
-            # 防止模型在 Action 后自行续写 Observation / Final Answer，污染真实观察
-            raw = re.split(r"\n\s*Observation\s*:", raw, maxsplit=1, flags=re.I)[0]
             parsed = _parse_react_step(raw)
             rec: dict[str, Any] = {
                 "step": step_idx,
@@ -231,11 +229,7 @@ class ReActAgent:
                 "parsed": {k: v for k, v in parsed.items() if k != "raw"},
             }
 
-            if (
-                parsed.get("done")
-                and parsed.get("final_answer")
-                and not parsed.get("action")
-            ):
+            if parsed.get("done") and parsed.get("final_answer"):
                 answer = str(parsed["final_answer"])
                 rec["final"] = True
                 steps.append(rec)

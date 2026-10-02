@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,8 +25,8 @@ async def health() -> dict[str, str]:
 @router.get("/health/ready")
 async def health_ready(
     session: AsyncSession = Depends(get_async_session),
-) -> dict[str, Any]:
-    """就绪探针：检查数据库连通性。"""
+) -> JSONResponse:
+    """就绪探针：检查数据库连通性；不可用时返回 503，便于编排系统摘流量。"""
     settings = get_settings()
     try:
         await session.execute(text("SELECT 1"))
@@ -35,32 +35,9 @@ async def health_ready(
         logger.warning("数据库就绪检查失败: {}", exc)
         db_ok = False
 
-    return {
+    body: dict[str, Any] = {
         "status": "ready" if db_ok else "degraded",
         "database": "up" if db_ok else "down",
         "app_env": settings.app_env,
     }
-
-
-@router.get("/health/circuit")
-async def health_circuit() -> dict[str, Any]:
-    """熔断器状态快照；未配置模型时返回 unconfigured。"""
-    from app.api.routes.chat import get_model_router
-
-    try:
-        model_router = get_model_router()
-    except HTTPException:
-        return {"status": "unconfigured"}
-    await model_router.refresh()
-    return model_router.snapshot()
-
-
-@router.get("/traces/{trace_id}")
-async def get_trace(trace_id: str) -> dict[str, Any]:
-    """按 trace_id 查询内存中的 Span 树。"""
-    from app.api.routes.chat import _tracer
-
-    record = _tracer.get_trace(trace_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="trace 不存在")
-    return asdict(record)
+    return JSONResponse(content=body, status_code=200 if db_ok else 503)

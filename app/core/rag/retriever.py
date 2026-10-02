@@ -13,14 +13,6 @@ from loguru import logger
 from app.models.enums import RetrievalMode
 from app.models.schemas import RetrievalResult
 
-try:
-    import jieba
-
-    jieba.setLogLevel(50)
-    _HAS_JIEBA = True
-except ImportError:  # pragma: no cover
-    _HAS_JIEBA = False
-
 
 @runtime_checkable
 class EmbeddingProtocol(Protocol):
@@ -46,18 +38,23 @@ class MilvusSearchable(Protocol):
         ...
 
 
+_WORD_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
+
+
 def _tokenize(text: str) -> list[str]:
-    """中英文分词：优先 jieba 细粒度切分，无 jieba 时退化为「英文词 + 单汉字」。"""
-    text = text.lower().strip()
-    if not text:
-        return []
-    if _HAS_JIEBA:
-        return [
-            token
-            for token in jieba.cut_for_search(text)
-            if re.search(r"[\w\u4e00-\u9fff]", token)
-        ]
-    return re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", text)
+    """中英文分词：英文/数字按词切分，中文按二元组（bigram）切分。
+
+    不能按 ``[\\w\\u4e00-\\u9fff]+`` 整体切分，否则整句中文会被当成单一 token，
+    查询与文档永远无法命中（BM25 对中文失效）。
+    """
+    tokens: list[str] = [t.lower() for t in _WORD_PATTERN.findall(text)]
+    for segment in _CJK_PATTERN.findall(text):
+        if len(segment) == 1:
+            tokens.append(segment)
+            continue
+        tokens.extend(segment[i : i + 2] for i in range(len(segment) - 1))
+    return tokens
 
 
 class _BM25Index:
@@ -85,27 +82,6 @@ class _BM25Index:
         self._df.clear()
         self._N = 0
         self._idf.clear()
-
-    def build(self, documents: dict[str, str]) -> None:
-        """一次性构建索引：统计 df / avgdl 后统一计算一次 IDF。"""
-        self.clear()
-        for doc_id, text in documents.items():
-            tokens = _tokenize(text)
-            tf: defaultdict[str, int] = defaultdict(int)
-            for t in tokens:
-                tf[t] += 1
-            for t in tf:
-                self._df[t] += 1
-            self._doc_ids.append(doc_id)
-            self._documents.append(text)
-            self._doc_freqs.append(dict(tf))
-            self._doc_lens.append(len(tokens))
-        self._N = len(self._doc_ids)
-        self._avgdl = sum(self._doc_lens) / self._N if self._N else 0.0
-        self._idf = {
-            term: math.log(1.0 + (self._N - df + 0.5) / (df + 0.5))
-            for term, df in self._df.items()
-        }
 
     def add_document(self, doc_id: str, text: str) -> None:
         """添加文档并更新统计量。"""
@@ -182,8 +158,11 @@ class MultiRetriever:
 
         :param id_to_text: 文档 ID 到文本的映射
         """
-        self._bm25.build(id_to_text)
-        self._id_to_text = dict(id_to_text)
+        self._bm25.clear()
+        self._id_to_text.clear()
+        for did, text in id_to_text.items():
+            self._bm25.add_document(did, text)
+            self._id_to_text[did] = text
         logger.info("BM25 索引已更新，文档数: {}", len(id_to_text))
 
     async def retrieve(
@@ -209,7 +188,7 @@ class MultiRetriever:
             raise TypeError("embedding_model 需实现 embed_query 方法")
 
         def _sync_embed() -> list[float]:
-            return self._embed.embed_query(query)
+            return list(self._embed.embed_query(query))
 
         try:
             vector = await asyncio.to_thread(_sync_embed)
@@ -250,7 +229,7 @@ class MultiRetriever:
             entity = getattr(hit, "entity", None) or {}
             if hasattr(hit, "entity"):
                 try:
-                    entity = hit.entity.to_dict()  # type: ignore[assignment]
+                    entity = hit.entity.to_dict()
                 except Exception:
                     entity = getattr(hit, "entity", {})
             # 距离 / 分数：distance 越小越好（L2）；IP 越大越好
@@ -306,17 +285,7 @@ class MultiRetriever:
             for rank, item in enumerate(lst):
                 rid = item.id
                 scores[rid] = scores.get(rid, 0.0) + 1.0 / (k + rank + 1)
-                # 不比较 L2 距离与 BM25 分数（量纲不同）：优先保留有内容的向量原文
-                existing = id_best.get(rid)
-                if existing is None:
-                    id_best[rid] = item
-                elif item.content and not existing.content:
-                    id_best[rid] = item
-                elif (
-                    item.source == "vector"
-                    and existing.source != "vector"
-                    and item.content
-                ):
+                if rid not in id_best or item.score > id_best[rid].score:
                     id_best[rid] = item
         merged_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:top_k]
         merged: list[RetrievalResult] = []

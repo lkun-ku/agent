@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-from typing import Any
-
 from loguru import logger
 
 from app.core.memory.long_term import LongTermMemory
@@ -50,34 +47,3 @@ class MemoryManager:
         except Exception as e:
             logger.exception("保存短期记忆失败: {}", e)
             raise RuntimeError(f"save 失败: {e}") from e
-
-    async def save_long_term(
-        self,
-        session_id: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> str | None:
-        """写入长期记忆；按内容哈希做跨进程去重，失败只告警。"""
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        dedup_key = f"ltm:{session_id}:{digest}"
-        first_time = await self._stm.mark_once(dedup_key)
-        if not first_time:
-            logger.info("跳过重复长期记忆 session={} digest={}", session_id, digest[:8])
-            return None
-
-        try:
-            duplicate = await self._ltm.exists(session_id, content)
-        except Exception as e:
-            logger.warning("长期记忆存在性检查失败，按新内容写入: {}", e)
-            duplicate = False
-
-        if duplicate:
-            logger.info("长期记忆已存在，跳过 session={}", session_id)
-            return None
-
-        try:
-            return await self._ltm.store(session_id, content, metadata or {})
-        except Exception as e:
-            await self._stm.forget_key(dedup_key)
-            logger.warning("写入长期记忆失败: {}", e)
-            return None

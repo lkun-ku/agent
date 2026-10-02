@@ -1,0 +1,27 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+        exclude: ^(data/|knowledge/|uploads/|logs/)
+      - id: trailing-whitespace
+        exclude: ^(data/|knowledge/|uploads/|logs/)
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check app tests
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy app
+        language: system
+        types: [python]
+        pass_filenames: false

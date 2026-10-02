@@ -9,7 +9,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +59,13 @@ class ReflectionLLM(Protocol):
 def _extract_json(text: str) -> dict[str, Any]:
     text = text.strip()
     try:
-        return json.loads(text)
+        return cast("dict[str, Any]", json.loads(text))
     except json.JSONDecodeError:
         pass
     m = re.search(r"\{[\s\S]*\}", text)
     if not m:
         raise ValueError("无法解析 JSON")
-    return json.loads(m.group(0))
+    return cast("dict[str, Any]", json.loads(m.group(0)))
 
 
 class ReflectionAgent:

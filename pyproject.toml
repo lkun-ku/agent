@@ -5,20 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "enterprise-ai-agent"
 version = "0.1.0"
-description = "企业级 AI Agent 服务（FastAPI + LangChain/LangGraph + RAG）"
+description = "企业级客服 Agent 服务（FastAPI + DeepSeek + RAG + 退款工具）"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Your Team" }]
-keywords = ["ai", "agent", "rag", "fastapi", "langchain"]
+keywords = ["ai", "agent", "rag", "fastapi", "customer-support"]
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
-    "langchain>=0.3.0",
-    "langchain-openai>=0.3.0",
-    "langchain-community>=0.3.0",
-    "langgraph>=0.3.0",
-    "pymilvus>=2.5.0",
+    "pymilvus>=2.5.0,<3.0",
     "redis>=5.2.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "psycopg2-binary>=2.9.0",
@@ -27,28 +23,19 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "python-multipart>=0.0.18",
     "tiktoken>=0.8.0",
-    "jieba>=0.42.1",
     "sentence-transformers>=3.3.0",
     "httpx>=0.28.0",
     "loguru>=0.7.0",
-    "tenacity>=9.0.0",
-    "python-dotenv>=1.0.0",
-    "unstructured>=0.16.0",
     "pypdf>=5.0.0",
-    "python-docx>=1.1.0",
     "openai>=1.60.0",
     "numpy>=2.0.0",
 ]
 
 [project.optional-dependencies]
-ocr = [
-    "pytesseract>=0.3.10",
-    "pdf2image>=1.17.0",
-    "Pillow>=10.0.0",
-]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
 ]
@@ -64,12 +51,39 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# 直接运行脚本时需要先补 sys.path 再导入 app.*
+"app/main.py" = ["E402"]
+# 内嵌 HTML/CSS 模板，长行无法按 Python 规则折行
+"app/api/routes/web.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
-strict = false
+strict = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q"
+asyncio_mode = "auto"
+markers = [
+    "integration: 需要真实 PostgreSQL 的用例；无服务时跳过",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::pymilvus.PyMilvusDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

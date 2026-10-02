@@ -1,18 +1,20 @@
-"""工具基类：统一 name、description、parameters 与 execute 接口。"""
+"""工具基类：统一 name、description、parameters、execute 与生命周期接口。"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.core.tools.schemas import ToolResult
+
 
 class ToolParameter(BaseModel):
-    """JSON Schema 风格的单个参数描述（简化）。"""
+    """JSON Schema 风格的单个参数描述。"""
 
     name: str
-    type: str = "string"
+    type: Literal["string", "number", "integer", "boolean", "object", "array"] = "string"
     description: str = ""
     required: bool = True
 
@@ -37,5 +39,9 @@ class BaseTool(ABC):
         return {"type": "object", "properties": properties, "required": required}
 
     @abstractmethod
-    async def execute(self, **kwargs: Any) -> Any:
-        """执行工具逻辑；子类实现具体行为。"""
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        """执行工具逻辑；子类必须返回类型化结果。"""
+
+    def close(self) -> None:
+        """释放工具持有的资源；默认无资源。"""
+        return None

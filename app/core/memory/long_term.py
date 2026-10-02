@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
@@ -47,16 +46,6 @@ class LTMCollectionProtocol(Protocol):
         ...
 
 
-_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
-
-
-def _safe_id(value: str, field: str) -> str:
-    """白名单校验：ID 只允许字母、数字、下划线与连字符，最长 64。"""
-    if not _ID_RE.fullmatch(value):
-        raise ValueError(f"非法 {field}: {value!r}")
-    return value
-
-
 class LongTermMemory:
     """长期记忆：基于向量数据库的持久化记忆。"""
 
@@ -83,6 +72,11 @@ class LongTermMemory:
     def _ensure_coll(self) -> None:
         if not isinstance(self._coll, LTMCollectionProtocol):
             raise TypeError("milvus_collection 需支持 insert/search/delete")
+
+    @staticmethod
+    def _escape_literal(value: str) -> str:
+        """转义 Milvus 表达式中的字符串字面量（使用双引号包裹）。"""
+        return value.replace("\\", "\\\\").replace('"', '\\"')
 
     async def store(self, session_id: str, content: str, metadata: dict[str, Any]) -> str:
         """写入一条长期记忆，返回 memory_id。"""
@@ -117,28 +111,14 @@ class LongTermMemory:
 
         return memory_id
 
-    async def exists(self, session_id: str, content: str) -> bool:
-        """检查会话内是否已有完全相同的内容（用于自动写入去重）。"""
-        sid = _safe_id(session_id, "session_id")
-        self._ensure_coll()
-
-        def _sync() -> bool:
-            rows = self._coll.query(
-                expr=f'{self.session_field} == "{sid}"',
-                output_fields=[self.pk_field, self.content_field],
-            )
-            return any(str(row.get(self.content_field, "")) == content for row in rows)
-
-        return await asyncio.to_thread(_sync)
-
     async def recall(self, query: str, session_id: str, top_k: int = 5) -> list[MemoryItem]:
         """按语义在指定会话内召回记忆。"""
-        sid = _safe_id(session_id, "session_id")
         self._ensure_embed()
         self._ensure_coll()
 
         def _sync() -> list[MemoryItem]:
             vec = self._embed.embed_query(query)
+            sid = self._escape_literal(session_id)
             expr = f'{self.session_field} == "{sid}"'
             out = self._coll.search(
                 data=[vec],
@@ -154,7 +134,7 @@ class LongTermMemory:
                 entity = getattr(hit, "entity", {}) or {}
                 if hasattr(hit, "entity") and not isinstance(entity, dict):
                     try:
-                        entity = hit.entity.to_dict()  # type: ignore[assignment]
+                        entity = hit.entity.to_dict()
                     except Exception:
                         entity = {}
                 rid = str(entity.get(self.pk_field) or getattr(hit, "id", ""))
@@ -178,10 +158,10 @@ class LongTermMemory:
 
     async def forget(self, memory_id: str) -> None:
         """按主键删除一条记忆。"""
-        mid = _safe_id(memory_id, "memory_id")
         self._ensure_coll()
 
         def _sync() -> None:
+            mid = self._escape_literal(memory_id)
             expr = f'{self.pk_field} == "{mid}"'
             self._coll.delete(expr)
             try:

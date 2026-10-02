@@ -1,0 +1,37 @@
+﻿字段名,中文名,数据类型,是否必填,说明
+refund_id,退款单号,string,是,主键；格式 RF+日期+4 位序号，全局唯一
+after_sale_no,平台售后单号,string,否,上游售后编号，仅用于回传与排查
+order_id,订单号,string,是,退款所属订单
+user_id,买家ID,string,是,脱敏买家标识；用于归属校验与画像
+idempotency_key,幂等键,string,是,同一申请重复推送时用于去重；缺失时由退款单号派生
+order_status,订单状态,string,是,OrderStatus 枚举值；CLOSED/REFUNDED 直接驳回，DELIVERED_VIRTUAL 视为虚拟商品
+payment_no,支付流水号,string,否,支付渠道流水；为空表示未支付
+item_name,商品名称,string,否,仅用于交接单与看板展示
+item_count,商品件数,integer,否,默认 1
+goods_fee,商品金额,integer,是,整数分
+freight_fee,运费,integer,是,整数分
+tax_fee,税费,integer,否,整数分；大于 0 且可退=实付-税 时触发税费不退
+discount_fee,优惠金额,integer,是,整数分
+paid_fee,实付金额,integer,是,整数分；应满足 商品+运费+税费-优惠
+refundable_fee,可退金额,integer,是,整数分；退款打款上限
+refund_fee,申请退款金额,integer,是,整数分；超过可退金额会被驳回
+refund_type,退款类型,string,是,REFUND_ONLY / RETURN_AND_REFUND / FREIGHT_ONLY
+refund_scope,退款范围,string,是,FULL / PARTIAL / FREIGHT
+reason_code,退款原因码,string,是,上游原因码，必须能在 REASON_CODE_MAP 中映射
+reason_desc,退款说明,string,否,用户原话摘要
+return_required,是否需退货,boolean,是,true 时结合退货状态判断是否挂起
+return_status,退货状态,string,是,NONE / WAIT_BUYER_SEND / IN_TRANSIT / RECEIVED / EXCEPTION
+apply_time,申请时间,datetime,是,ISO8601，带 +08:00
+sla_deadline,处理时限,datetime,否,ISO8601；超时不改变金额结论
+delivered_at,签收时间,datetime,否,ISO8601；用于计算售后时效与签收后极短退款
+evidence,举证材料,array<string>,否,图片/视频链接列表
+platform_intervened,平台是否介入,boolean,是,true 时禁止商户自行退款，转纠纷举证
+channel_error_code,渠道异常码,string,否,CHANNEL_TIMEOUT 表示只查不发；其他值转支付对账
+channel_error_message,渠道异常说明,string,否,异常描述，仅用于交接单
+retry_count,渠道重试次数,integer,否,默认 0
+user_risk_level,买家风险等级,string,否,HIGH / MEDIUM / LOW；驱动 R20
+user_refund_rate_30d,近30天退款率,float,否,0~1 之间；驱动 R19
+previous_refund_id,历史退款单号,string,否,存在且可退为 0 时判定为已退款
+scenario,测试场景编号,string,是,数据集专用：S01~S14
+scenario_name,测试场景名称,string,是,数据集专用
+expected_action,预期动作码,string,是,数据集专用：用于验收断言

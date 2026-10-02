@@ -2,26 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
 from loguru import logger
-
-
-def _hex_id(value: str, length: int) -> str:
-    """把 UUID/任意 trace 标识转成 OTLP 需要的定长十六进制。"""
-    try:
-        raw = uuid.UUID(value).hex
-    except ValueError:
-        raw = hashlib.sha1(value.encode("utf-8")).hexdigest()
-    return raw[:length].ljust(length, "0")
 
 
 @dataclass
@@ -33,11 +20,8 @@ class TraceSpan:
     operation: str
     parent_span_id: str | None
     start_time: float
-    start_epoch: float = field(default_factory=time.time)
     end_time: float | None = None
-    end_epoch: float | None = None
     result: dict[str, Any] | None = None
-    usage: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -119,10 +103,7 @@ class Tracer:
                 logger.warning("end_span 找不到 trace_id={}", span.trace_id)
                 return
             span.end_time = time.perf_counter()
-            span.end_epoch = time.time()
             span.result = result
-            if isinstance(result, dict):
-                span.usage = result.get("usage")
             span.error = error
             logger.debug(
                 "trace={} span={} op={} 结束 error={}",
@@ -144,122 +125,6 @@ class Tracer:
                 spans=list(rec.spans),
                 created_at=rec.created_at,
             )
-
-    def total_tokens(self, record: TraceRecord) -> int:
-        """汇总一条 trace 中所有 span 的 total_tokens。"""
-        total = 0
-        for span in record.spans:
-            usage = span.usage or {}
-            total += int(usage.get("total_tokens", 0) or 0)
-        return total
-
-    def export_jsonl(self, trace_id: str, path: str = "logs/trace.jsonl") -> bool:
-        """把一条 trace 追加写入 JSONL；trace 不存在时返回 False。"""
-        record = self.get_trace(trace_id)
-        if record is None:
-            return False
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(asdict(record), ensure_ascii=False, default=str)
-        with target.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-        return True
-
-    async def export_otlp(
-        self,
-        trace_id: str,
-        endpoint: str,
-        *,
-        service_name: str = "enterprise-ai-agent",
-        headers: dict[str, str] | None = None,
-        client: Any | None = None,
-    ) -> bool:
-        """按 OTLP/HTTP JSON 导出；失败返回 False，不抛异常。"""
-        record = self.get_trace(trace_id)
-        if record is None or not record.spans:
-            return False
-
-        trace_hex = _hex_id(record.trace_id, 32)
-
-        spans_payload: list[dict[str, Any]] = []
-        for span in record.spans:
-            start_ns = int(span.start_epoch * 1_000_000_000)
-            end_epoch = span.end_epoch or span.start_epoch
-            end_ns = int(end_epoch * 1_000_000_000)
-
-            attributes: list[dict[str, Any]] = []
-            usage = span.usage or {}
-            if "total_tokens" in usage:
-                attributes.append(
-                    {
-                        "key": "usage.total_tokens",
-                        "value": {"intValue": str(usage["total_tokens"])},
-                    }
-                )
-            if span.error:
-                attributes.append(
-                    {"key": "error", "value": {"stringValue": span.error}}
-                )
-
-            if span.end_time is None:
-                status_code = 0
-            elif span.error:
-                status_code = 2
-            else:
-                status_code = 1
-
-            spans_payload.append(
-                {
-                    "traceId": trace_hex,
-                    "spanId": _hex_id(span.span_id, 16),
-                    "parentSpanId": _hex_id(span.parent_span_id, 16)
-                    if span.parent_span_id
-                    else "",
-                    "name": span.operation,
-                    "kind": 1,
-                    "startTimeUnixNano": str(start_ns),
-                    "endTimeUnixNano": str(end_ns),
-                    "attributes": attributes,
-                    "status": {"code": status_code},
-                }
-            )
-
-        payload = {
-            "resourceSpans": [
-                {
-                    "resource": {
-                        "attributes": [
-                            {
-                                "key": "service.name",
-                                "value": {"stringValue": service_name},
-                            }
-                        ]
-                    },
-                    "scopeSpans": [
-                        {
-                            "scope": {"name": "app.tracer"},
-                            "spans": spans_payload,
-                        }
-                    ],
-                }
-            ]
-        }
-
-        own_client = client is None
-        http_client = client or httpx.AsyncClient(timeout=10.0)
-        try:
-            response = await http_client.post(
-                endpoint.rstrip("/") + "/v1/traces",
-                json=payload,
-                headers={"Content-Type": "application/json", **(headers or {})},
-            )
-            return 200 <= response.status_code < 300
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("OTLP 导出失败: {}", exc)
-            return False
-        finally:
-            if own_client:
-                await http_client.aclose()
 
     def _trim_locked(self) -> None:
         """限制内存中 trace 数量。"""

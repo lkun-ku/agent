@@ -1,5 +1,6 @@
 services:
   app:
+    image: project-python-app:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -12,6 +13,31 @@ services:
       MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.deepseek.com}
+      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-flash}
+      OPENAI_THINKING: ${OPENAI_THINKING:-false}
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_TOP_K: ${RAG_TOP_K:-4}
+      RAG_MAX_DISTANCE: ${RAG_MAX_DISTANCE:-1.1}
+      RAG_COLLECTION_NAME: ${RAG_COLLECTION_NAME:-knowledge_chunks}
+      RAG_RETRIEVAL_MODE: ${RAG_RETRIEVAL_MODE:-hybrid}
+      RAG_CACHE_ENABLED: ${RAG_CACHE_ENABLED:-true}
+      RAG_CACHE_TTL_SECONDS: ${RAG_CACHE_TTL_SECONDS:-3600}
+      CONVERSATION_PERSISTENCE_ENABLED: ${CONVERSATION_PERSISTENCE_ENABLED:-true}
+      TRACE_PERSISTENCE_ENABLED: ${TRACE_PERSISTENCE_ENABLED:-true}
+      AGENT_ORCHESTRATOR_ENABLED: ${AGENT_ORCHESTRATOR_ENABLED:-true}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-models/bge-large-zh-v1.5}
+      EMBEDDING_LOCAL_ONLY: ${EMBEDDING_LOCAL_ONLY:-true}
+      RERANKER_MODEL: ${RERANKER_MODEL:-models/bge-reranker-v2-m3}
+      RAG_RERANK_CANDIDATES: ${RAG_RERANK_CANDIDATES:-12}
+      REFUND_ENABLED: ${REFUND_ENABLED:-false}
+      REFUND_DATA_DIR: ${REFUND_DATA_DIR:-data/refund}
+      REFUND_SEED_DATASET: ${REFUND_SEED_DATASET:-false}
+    volumes:
+      - ./app:/app/app
+      - ./models:/app/models:ro
+      - ./knowledge:/app/knowledge:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,7 +92,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: enterprise-ai-agent-minio
     environment:
       MINIO_ACCESS_KEY: minioadmin
@@ -80,7 +106,7 @@ services:
     restart: unless-stopped
 
   milvus:
-    image: milvusdb/milvus:v2.4.15
+    image: milvusdb/milvus:v2.6.25
     container_name: enterprise-ai-agent-milvus
     command: ["milvus", "run", "standalone"]
     environment:

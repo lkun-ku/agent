@@ -9,7 +9,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from app.core.agent.react_agent import AgentResult, LLMCallable, MemoryLike, ToolInvoker
 
@@ -27,15 +27,13 @@ PLAN_SYSTEM_PROMPT = """你是任务规划专家。请将用户目标拆分为�
       "description": "具体要做什么",
       "action_type": "tool|reasoning",
       "tool_name": "若 action_type 为 tool 则填写工具名，否则 null",
-      "tool_args": {"参数名": "参数值"},
-      "tool_args_hint": "工具参数要点（自然语言提示，tool_args 缺失时使用）"
+      "tool_args_hint": "工具参数要点（自然语言提示）"
     }
   ]
 }
 
 规则：
 - action_type 为 reasoning 表示主要依赖模型推理整合，无需调用工具。
-- action_type 为 tool 时优先给出 tool_args（严格使用工具的参数名），无法确定时再给 tool_args_hint。
 - 子任务数量建议 2～8 个，避免过细或过粗。
 - id 必须唯一。
 """
@@ -54,6 +52,10 @@ REPLAN_SYSTEM_PROMPT = """你是任务规划专家。根据已执行结果与错
 """
 
 
+class PlanningError(RuntimeError):
+    """计划生成失败（模型输出不可解析或子任务为空）。"""
+
+
 @dataclass
 class SubTask:
     """单个子任务。"""
@@ -63,7 +65,6 @@ class SubTask:
     description: str
     action_type: str  # "tool" | "reasoning"
     tool_name: str | None = None
-    tool_args: dict[str, Any] | None = None
     tool_args_hint: str | None = None
 
 
@@ -79,13 +80,13 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     """从模型输出中提取 JSON 对象。"""
     text = text.strip()
     try:
-        return json.loads(text)
+        return cast("dict[str, Any]", json.loads(text))
     except json.JSONDecodeError:
         pass
     m = re.search(r"\{[\s\S]*\}", text)
     if not m:
         raise ValueError("无法从模型输出中解析 JSON")
-    return json.loads(m.group(0))
+    return cast("dict[str, Any]", json.loads(m.group(0)))
 
 
 def _parse_subtasks(data: dict[str, Any]) -> list[SubTask]:
@@ -101,11 +102,6 @@ def _parse_subtasks(data: dict[str, Any]) -> list[SubTask]:
                 description=str(item.get("description", "")),
                 action_type=str(item.get("action_type", "reasoning")).lower(),
                 tool_name=item.get("tool_name"),
-                tool_args=(
-                    item.get("tool_args")
-                    if isinstance(item.get("tool_args"), dict)
-                    else None
-                ),
                 tool_args_hint=item.get("tool_args_hint"),
             )
         )
@@ -128,7 +124,11 @@ class PlannerAgent:
         self.max_replan_attempts = max(0, max_replan_attempts)
 
     async def plan(self, query: str) -> list[SubTask]:
-        """根据用户目标生成子任务列表。"""
+        """根据用户目标生成子任务列表。
+
+        解析失败或子任务为空时抛出 :class:`PlanningError`，由上层决定是否降级到
+        ReAct；不再静默退化为「单步推理」，否则调用方无法感知计划已失效。
+        """
         messages: Sequence[dict[str, str]] = [
             {"role": "system", "content": PLAN_SYSTEM_PROMPT},
             {"role": "user", "content": f"用户目标：\n{query}\n\n请输出 JSON 计划。"},
@@ -136,18 +136,13 @@ class PlannerAgent:
         try:
             raw = await self._llm.acomplete(messages, temperature=0.3)
             data = _extract_json_object(raw)
-            return _parse_subtasks(data)
-        except Exception:  # noqa: BLE001
+            subtasks = _parse_subtasks(data)
+        except Exception as e:  # noqa: BLE001
             logger.exception("生成计划失败")
-            # 降级：单步推理任务
-            return [
-                SubTask(
-                    id="fallback_1",
-                    title="直接回答",
-                    description=query,
-                    action_type="reasoning",
-                )
-            ]
+            raise PlanningError(f"计划生成失败: {e}") from e
+        if not subtasks:
+            raise PlanningError("模型未返回有效子任务")
+        return subtasks
 
     async def execute(
         self,
@@ -174,14 +169,8 @@ class PlannerAgent:
                 if task.action_type == "tool" and task.tool_name:
                     if allowed is not None and task.tool_name not in allowed:
                         raise RuntimeError(f"工具 {task.tool_name} 不在允许列表中")
-                    if task.tool_args:
-                        args = dict(task.tool_args)
-                    else:
-                        # 兼容旧计划：无结构化参数时才回退，并明确告警
-                        logger.warning(
-                            "子任务 %s 未提供 tool_args，回退到 hint 参数", task.id
-                        )
-                        args = {"hint": task.tool_args_hint or "", "user_query": query}
+                    # 将 hint 作为简单参数传入（企业场景可换为结构化解析）
+                    args = {"hint": task.tool_args_hint or "", "user_query": query}
                     obs = await self._tools.invoke(task.tool_name, args)
                     rec["observation"] = obs[:8000]
                     rec["status"] = "ok"
@@ -192,15 +181,17 @@ class PlannerAgent:
                         {
                             "role": "system",
                             "content": (
-                                "你是执行专家。根据已有子任务结果，"
-                                "完成当前子任务描述，输出简洁结论。"
+                                "你是执行专家。根据已有子任务结果，完成当前子任务描述，"
+                                "输出简洁结论。"
                             ),
                         },
                         {
                             "role": "user",
                             "content": (
-                                f"原始问题：{query}\n当前子任务：{task.title}\n"
-                                f"详情：{task.description}\n已有结果：\n{ctx}"
+                                f"原始问题：{query}\n"
+                                f"当前子任务：{task.title}\n"
+                                f"详情：{task.description}\n"
+                                f"已有结果：\n{ctx}"
                             ),
                         },
                     ]
@@ -311,7 +302,17 @@ class PlannerAgent:
         """
         高层封装：计划 → 执行；失败则重规划并最多重试 max_replan_attempts 次。
         """
-        current_plan = await self.plan(query)
+        try:
+            current_plan = await self.plan(query)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("计划阶段失败，交由上层降级")
+            return AgentResult(
+                success=False,
+                final_answer="",
+                steps=[],
+                error=f"计划生成失败: {e}",
+            )
+
         last_error: str | None = None
         aggregate_results: list[dict[str, Any]] = []
 

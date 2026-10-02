@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
-from openai import APIError, AsyncOpenAI, RateLimitError
+from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
 
-from app.infrastructure.llm.circuit_breaker import CircuitBreaker, StateStore
+from app.infrastructure.llm.circuit_breaker import CircuitBreaker
 from app.infrastructure.llm.types import ModelProvider
 
 
@@ -23,6 +24,15 @@ class LLMResponse(BaseModel):
     raw: dict[str, Any] | None = None
 
 
+def build_thinking_extra(enabled: bool) -> dict[str, Any]:
+    """构造 DeepSeek 思考模式开关（顶层参数，需经 ``extra_body`` 透传）。
+
+    该模式默认开启，开启后 ``temperature`` 不生效且小 ``max_tokens`` 会被思维链
+    占满导致 ``content`` 为空，因此需要显式下发关闭。
+    """
+    return {"thinking": {"type": "enabled" if enabled else "disabled"}}
+
+
 @dataclass
 class ModelConfig:
     """单路模型配置。"""
@@ -33,6 +43,7 @@ class ModelConfig:
     provider: ModelProvider = ModelProvider.OPENAI
     priority: int = 0
     weight: float = 1.0
+    thinking: bool | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -45,39 +56,31 @@ class ModelRouter:
         *,
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
-        state_store: StateStore | None = None,
+        max_retries: int = 1,
+        retry_base_delay: float = 0.5,
+        retry_max_delay: float = 5.0,
     ) -> None:
         if not model_configs:
             raise ValueError("model_configs 不能为空")
+        self._max_retries = max(0, min(max_retries, 3))
+        self._retry_base_delay = max(0.0, retry_base_delay)
+        self._retry_max_delay = max(self._retry_base_delay, retry_max_delay)
 
         self._configs = sorted(model_configs, key=lambda c: c.priority)
+        self._configs_by_id: dict[str, ModelConfig] = {c.model_id: c for c in self._configs}
         self._breakers: dict[str, CircuitBreaker] = {}
         for cfg in self._configs:
             self._breakers[cfg.model_id] = CircuitBreaker(
                 failure_threshold=failure_threshold,
                 recovery_timeout=recovery_timeout,
                 name=f"llm:{cfg.model_id}",
-                state_store=state_store,
             )
         self._clients: dict[str, AsyncOpenAI] = {}
         for cfg in self._configs:
             kwargs: dict[str, Any] = {"api_key": cfg.api_key}
             if cfg.base_url:
                 kwargs["base_url"] = cfg.base_url
-            self._clients[cfg.model_id] = AsyncOpenAI(
-                timeout=60.0,
-                max_retries=2,
-                **kwargs,
-            )
-
-    def snapshot(self) -> dict[str, dict[str, Any]]:
-        """所有模型的熔断状态快照。"""
-        return {model_id: breaker.snapshot() for model_id, breaker in self._breakers.items()}
-
-    async def refresh(self) -> None:
-        """从共享存储刷新所有 breaker 的状态。"""
-        for breaker in self._breakers.values():
-            await breaker.refresh()
+            self._clients[cfg.model_id] = AsyncOpenAI(**kwargs)
 
     def _select_candidates(
         self,
@@ -115,25 +118,53 @@ class ModelRouter:
         candidates = self._select_candidates(model_preference)
         last_error: Exception | None = None
 
+        retryable = (TimeoutError, APIConnectionError, RateLimitError)
         for cfg in candidates:
             breaker = self._breakers[cfg.model_id]
-            try:
-                return await breaker.call(
-                    self._try_model,
-                    cfg.model_id,
-                    messages,
-                    **kwargs,
-                )
-            except RuntimeError as exc:
-                # 熔断打开
-                last_error = exc
-                logger.warning("模型 [{}] 被熔断跳过: {}", cfg.model_id, exc)
-            except (TimeoutError, APIError, RateLimitError) as exc:
-                last_error = exc
-                logger.warning("模型 [{}] 调用失败，尝试降级: {}", cfg.model_id, exc)
-            except Exception as exc:
-                last_error = exc
-                logger.exception("模型 [{}] 未预期错误: {}", cfg.model_id, exc)
+            for attempt in range(self._max_retries + 1):
+                try:
+                    return await breaker.call(
+                        self._try_model,
+                        cfg.model_id,
+                        messages,
+                        **kwargs,
+                    )
+                except RuntimeError as exc:
+                    # 熔断打开或调用被拒绝：不再原地重试，直接换候选。
+                    last_error = exc
+                    logger.warning("模型 [{}] 被熔断跳过: {}", cfg.model_id, exc)
+                    break
+                except retryable as exc:
+                    last_error = exc
+                    if attempt >= self._max_retries:
+                        logger.warning(
+                            "模型 [{}] 重试耗尽，尝试降级: {}",
+                            cfg.model_id,
+                            exc,
+                        )
+                        break
+                    delay = min(
+                        self._retry_base_delay * (2**attempt),
+                        self._retry_max_delay,
+                    )
+                    logger.warning(
+                        "模型 [{}] 瞬时失败，第 {}/{} 次重试，等待 {:.2f}s: {}",
+                        cfg.model_id,
+                        attempt + 1,
+                        self._max_retries,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+                except APIError as exc:
+                    # 4xx 等非瞬时错误不重试，避免无效放大。
+                    last_error = exc
+                    logger.warning("模型 [{}] 非瞬时错误，跳过: {}", cfg.model_id, exc)
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    logger.exception("模型 [{}] 未预期错误: {}", cfg.model_id, exc)
+                    break
 
         msg = "所有候选模型均不可用"
         if last_error:
@@ -150,6 +181,11 @@ class ModelRouter:
         client = self._clients[model_id]
         temperature = kwargs.pop("temperature", 0.7)
         max_tokens = kwargs.pop("max_tokens", None)
+        extra_body: dict[str, Any] = dict(kwargs.pop("extra_body", None) or {})
+
+        cfg = self._configs_by_id.get(model_id)
+        if cfg is not None and cfg.thinking is not None:
+            extra_body.update(build_thinking_extra(cfg.thinking))
 
         params: dict[str, Any] = {
             "model": model_id,
@@ -158,6 +194,8 @@ class ModelRouter:
         }
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
+        if extra_body:
+            params["extra_body"] = extra_body
         params.update(kwargs)
 
         try:
@@ -167,7 +205,9 @@ class ModelRouter:
             raise
 
         choice = resp.choices[0] if resp.choices else None
-        content = (choice.message.content or "") if choice else ""
+        content = (choice.message.content or "").strip() if choice else ""
+        if not content:
+            raise ValueError("模型返回空内容")
         usage = None
         if resp.usage:
             usage = {

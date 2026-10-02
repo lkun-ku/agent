@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 import tiktoken
 from loguru import logger
@@ -27,6 +28,7 @@ class DocumentChunker:
     ) -> None:
         self.chunk_size = max(32, chunk_size)
         self.chunk_overlap = max(0, min(chunk_overlap, self.chunk_size - 1))
+        self._encoding: Any | None
         try:
             self._encoding = tiktoken.get_encoding(encoding_name)
         except Exception as exc:
@@ -51,21 +53,18 @@ class DocumentChunker:
         return self._chunk_recursive(text, _depth=0)
 
     def _chunk_fixed(self, text: str) -> list[str]:
-        """固定窗口切分；单位与其它策略一致：有 tiktoken 按 token，否则按字符。"""
-        step = max(1, self.chunk_size - self.chunk_overlap)
-
-        if self._encoding is None:
-            return [text[i : i + self.chunk_size] for i in range(0, len(text), step)]
-
-        ids = self._encoding.encode(text)
+        """按固定字符窗口切片（近似 token 长度）。"""
         out: list[str] = []
-        for start in range(0, len(ids), step):
-            piece = ids[start : start + self.chunk_size]
-            if not piece:
+        start = 0
+        n = len(text)
+        while start < n:
+            end = min(n, start + self.chunk_size)
+            out.append(text[start:end])
+            if end >= n:
                 break
-            out.append(self._encoding.decode(piece))
-            if start + self.chunk_size >= len(ids):
-                break
+            start = end - self.chunk_overlap
+            if start < 0:
+                start = 0
         return out
 
     def _chunk_paragraph(self, text: str) -> list[str]:

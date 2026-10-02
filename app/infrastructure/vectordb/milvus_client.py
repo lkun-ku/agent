@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any
+import warnings
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from loguru import logger
 
@@ -18,15 +19,26 @@ try:
         utility,
     )
 except ImportError:  # pragma: no cover
-    Collection = Any  # type: ignore[misc, assignment]
-    CollectionSchema = Any  # type: ignore[misc, assignment]
-    DataType = Any  # type: ignore[misc, assignment]
-    FieldSchema = Any  # type: ignore[misc, assignment]
-    connections = Any  # type: ignore[misc, assignment]
-    utility = Any  # type: ignore[misc, assignment]
+    Collection = Any
+    CollectionSchema = Any
+    DataType = Any
+    FieldSchema = Any
+    connections = Any
+    utility = Any
+
+try:
+    from pymilvus import PyMilvusDeprecationWarning
+
+    # pymilvus 2.x 的 ORM API 仍在使用；升级到 3.x 前先屏蔽第三方弃用日志。
+    warnings.filterwarnings("ignore", category=PyMilvusDeprecationWarning)
+except ImportError:  # pragma: no cover
+    pass
 
 
-def _run_sync(func, *args, **kwargs):
+T = TypeVar("T")
+
+
+def _run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> asyncio.Future[T]:
     """在线程池中执行同步 Milvus SDK 调用，避免阻塞事件循环。"""
     loop = asyncio.get_event_loop()
     return loop.run_in_executor(None, lambda: func(*args, **kwargs))
@@ -68,8 +80,34 @@ class MilvusManager:
             logger.exception("连接 Milvus 失败: {}", exc)
             raise
 
-    async def create_collection(self, name: str, dim: int) -> None:
-        """创建向量集合；若已存在则跳过。"""
+    async def collection_exists(self, name: str) -> bool:
+        """判断集合是否存在（供上层自愈逻辑使用）。"""
+        await self._ensure_connection()
+        return bool(await _run_sync(utility.has_collection, name, self._alias))
+
+    async def collection_count(self, name: str) -> int:
+        """返回集合中的实体数；集合不存在时返回 0（用于判断是否需要回填）。"""
+        if not await self.collection_exists(name):
+            return 0
+
+        def _count() -> int:
+            col = Collection(name, using=self._alias)
+            return int(col.num_entities)
+
+        return int(await _run_sync(_count))
+
+    async def create_collection(
+        self,
+        name: str,
+        dim: int,
+        extra_fields: list[Any] | None = None,
+    ) -> None:
+        """创建向量集合；若已存在则跳过。
+
+        :param extra_fields: 额外的 ``FieldSchema`` 列表。默认只建 ``id``（主键）与
+            ``embedding``；若需要对接 ``MultiRetriever``（要求 ``text`` 字段）或
+            ``LongTermMemory``（要求 ``content``/``session_id``/``meta``），需在此传入。
+        """
         await self._ensure_connection()
 
         def _create() -> None:
@@ -84,25 +122,9 @@ class MilvusManager:
                     max_length=64,
                 ),
                 FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-                FieldSchema(
-                    name="text",
-                    dtype=DataType.VARCHAR,
-                    max_length=65535,
-                    default_value="",
-                ),
-                FieldSchema(
-                    name="session_id",
-                    dtype=DataType.VARCHAR,
-                    max_length=64,
-                    default_value="",
-                ),
-                FieldSchema(
-                    name="meta",
-                    dtype=DataType.VARCHAR,
-                    max_length=65535,
-                    default_value="",
-                ),
             ]
+            if extra_fields:
+                fields.extend(extra_fields)
             schema = CollectionSchema(
                 fields=fields,
                 description=f"向量集合 {name}",
@@ -136,20 +158,17 @@ class MilvusManager:
                 rid = f"auto_{i}"
             ids.append(str(rid))
 
-        entities: list[dict[str, Any]] = []
-        for i, m in enumerate(metadata):
-            entity: dict[str, Any] = {"id": ids[i], "embedding": vectors[i]}
-            if "text" in m:
-                entity["text"] = str(m["text"])
-            if "session_id" in m:
-                entity["session_id"] = str(m["session_id"])
-            if "meta" in m:
-                entity["meta"] = json.dumps(m["meta"], ensure_ascii=False, default=str)
-            entities.append(entity)
-
         def _insert() -> None:
             col = Collection(collection, using=self._alias)
-            col.insert(entities)
+            if any(len(m) > 1 for m in metadata):
+                # 含额外字段时按“字段名 -> 值”的字典行插入
+                rows = [
+                    {**m, "id": rid, "embedding": vec}
+                    for rid, vec, m in zip(ids, vectors, metadata, strict=True)
+                ]
+                col.insert(rows)
+            else:
+                col.insert([ids, vectors])
             col.flush()
 
         try:
@@ -159,30 +178,24 @@ class MilvusManager:
             logger.exception("Milvus 插入失败 collection={}: {}", collection, exc)
             raise
 
-    async def flush(self, collection: str) -> None:
-        """刷新集合，确保写入可见（长期记忆协议要求）。"""
-        await self._ensure_connection()
-
-        def _flush() -> None:
-            Collection(collection, using=self._alias).flush()
-
-        await _run_sync(_flush)
-
     async def search(
         self,
         collection: str,
         query_vector: list[float],
         top_k: int = 10,
+        *,
+        output_fields: list[str] | None = None,
         **search_params: Any,
     ) -> list[dict[str, Any]]:
-        """向量相似度检索，返回命中 id 与距离。"""
+        """向量相似度检索，返回命中 id、距离与指定的额外字段。"""
         await self._ensure_connection()
         params = search_params.get(
             "params",
             {"metric_type": "L2", "params": {"nprobe": 10}},
         )
+        extra_fields = [f for f in (output_fields or []) if f != "id"]
 
-        def _search():
+        def _search() -> list[dict[str, Any]]:
             col = Collection(collection, using=self._alias)
             col.load()
             res = col.search(
@@ -190,17 +203,18 @@ class MilvusManager:
                 anns_field="embedding",
                 param=params,
                 limit=top_k,
-                output_fields=["id"],
+                output_fields=["id", *extra_fields],
             )
             out: list[dict[str, Any]] = []
             for hits in res:
                 for hit in hits:
-                    out.append(
-                        {
-                            "id": hit.entity.get("id"),
-                            "distance": float(hit.distance),
-                        }
-                    )
+                    row: dict[str, Any] = {
+                        "id": hit.entity.get("id"),
+                        "distance": float(hit.distance),
+                    }
+                    for field in extra_fields:
+                        row[field] = hit.entity.get(field)
+                    out.append(row)
             return out
 
         try:
@@ -220,6 +234,8 @@ class MilvusManager:
         def _delete() -> None:
             col = Collection(collection, using=self._alias)
             col.delete(expr)
+            # 必须 flush，否则删除对后续检索不可见
+            col.flush()
 
         try:
             await _run_sync(_delete)

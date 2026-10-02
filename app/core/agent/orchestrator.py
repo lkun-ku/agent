@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from app.core.agent.planner import PlannerAgent
 from app.core.agent.react_agent import AgentResult, ReActAgent
@@ -124,13 +124,13 @@ class _LLMAdapter:
     async def acomplete(self, messages: Sequence[dict[str, str]], **kwargs: Any) -> str:
         fn = getattr(self._llm, "acomplete", None)
         if callable(fn):
-            return await fn(messages, **kwargs)
+            return cast("str", await fn(messages, **kwargs))
         fn2 = getattr(self._llm, "complete", None)
         if callable(fn2):
             # 同步实现时在线程中运行（简化：直接调用）
             import asyncio
 
-            return await asyncio.to_thread(fn2, messages, **kwargs)
+            return cast("str", await asyncio.to_thread(fn2, messages, **kwargs))
         raise TypeError("LLM 需实现 acomplete 或 complete")
 
 
@@ -147,7 +147,7 @@ class AgentOrchestrator:
         self,
         config: OrchestratorConfig,
         model_router: ModelRouter,
-        memory_manager: MemoryManager,
+        memory_manager: MemoryManager | None,
         tool_registry: ToolRegistry,
         tracer: Tracer,
     ) -> None:
@@ -189,17 +189,6 @@ class AgentOrchestrator:
             "orchestrator.start",
             {"user_input_len": len(user_input), "mode": mode},
         )
-
-        if self._memory is not None:
-            try:
-                await self._memory.append_turn(
-                    session_id,
-                    "user",
-                    user_input,
-                    {"source": "orchestrator"},
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("写入用户轮次失败: %s", e)
 
         steps: list[dict[str, Any]] = []
         degraded = False
@@ -244,31 +233,12 @@ class AgentOrchestrator:
             reflection_report: ReflectionReport | None = None
             if self._enable_reflection and answer:
                 try:
-                    reflection_report, decision = await self._run_reflection(
+                    reflection_report = await self._run_reflection(
                         user_input,
                         answer,
                         trace_id,
                         steps,
                     )
-                    if decision.get("suggest_retry"):
-                        hint = "；".join(reflection_report.suggestions) or "请补充证据并修正结论"
-                        self._tracer.log_event(
-                            trace_id,
-                            "reflection.retry",
-                            {"hint": hint, "quality": reflection_report.quality_score},
-                        )
-                        retry_result = await self._run_react(
-                            user_input,
-                            session_id,
-                            intent_ctx,
-                            trace_id,
-                            steps,
-                            suffix=f"[反思改进] {hint} ",
-                        )
-                        if retry_result.success and retry_result.final_answer:
-                            result = retry_result
-                            answer = retry_result.final_answer
-                            success = True
                 except Exception as e:  # noqa: BLE001
                     logger.warning("反思阶段失败，已跳过: %s", e)
                     self._tracer.log_event(trace_id, "reflection.skipped", {"error": str(e)})
@@ -328,18 +298,12 @@ class AgentOrchestrator:
             session_id=session_id,
         )
 
-        extra_system = str(self._config.get("system_prompt_extra", ""))
         ctx: dict[str, Any] = {
             "session_id": session_id,
             "tool_names": self._tool_names(intent),
-            "tool_catalog": getattr(
-                self._tools, "get_tools_description", lambda: ""
-            )(),
+            "tool_descriptions": getattr(self._tools, "get_tools_description", lambda: "")(),
             "trace_callback": trace_cb,
-            "extra_system": (
-                f"{suffix}{extra_system}"
-                f"当前识别意图：{intent.intent}，槽位：{intent.slots}"
-            ),
+            "extra_system": suffix + f"当前识别意图：{intent.intent}，槽位：{intent.slots}",
         }
 
         self._tracer.log_event(trace_id, "react.begin", {})
@@ -393,12 +357,10 @@ class AgentOrchestrator:
         answer: str,
         trace_id: str,
         steps: list[dict[str, Any]],
-    ) -> tuple[ReflectionReport, dict[str, Any]]:
+    ) -> ReflectionReport:
         llm = _LLMAdapter(self._model_router.get_llm("reflection"))
-        agent = ReflectionAgent(
-            llm=llm,
-            min_quality_to_pass=int(self._config.get("reflection_min_quality", 60)),
-        )
+        min_quality = int(self._config.get("reflection_min_quality", 60))
+        agent = ReflectionAgent(llm=llm, min_quality_to_pass=min_quality)
         trace_summary = str([s.get("phase") or s.get("subtask_id") for s in steps[-20:]])
         self._tracer.log_event(trace_id, "reflection.begin", {})
         report = await agent.reflect(
@@ -407,17 +369,12 @@ class AgentOrchestrator:
             evidence_snippets=None,
             trace_summary=trace_summary,
         )
-        decision = agent.should_retry_or_warn(report)
         self._tracer.log_event(
             trace_id,
             "reflection.end",
-            {
-                "quality": report.quality_score,
-                "hallucination": report.likely_hallucination,
-                "suggest_retry": decision.get("suggest_retry", False),
-            },
+            {"quality": report.quality_score, "hallucination": report.likely_hallucination},
         )
-        return report, decision
+        return report
 
 
 # ---------------------------------------------------------------------------
@@ -442,11 +399,7 @@ class InMemoryTracer:
 
     def end_span(self, span: Any, error: BaseException | None = None) -> None:
         self.events.append(
-            {
-                "type": "end_span",
-                "span": span,
-                "error": str(error) if error else None,
-            }
+            {"type": "end_span", "span": span, "error": str(error) if error else None}
         )
 
     def log_event(self, trace_id: str, name: str, payload: dict[str, Any]) -> None:

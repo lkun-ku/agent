@@ -41,6 +41,7 @@ class ShortTermMemory:
         self.window_size = window_size
         self.max_tokens = max_tokens
         self._key_prefix = "stm:session:"
+        self._encoding: Any | None
         try:
             self._encoding = tiktoken.get_encoding("cl100k_base")
         except Exception:
@@ -90,21 +91,6 @@ class ShortTermMemory:
                 raw = raw.decode("utf-8", errors="replace")
             messages.append(self._deserialize(str(raw)))
         return messages
-
-    async def mark_once(self, key: str, ttl: int = 7 * 24 * 3600) -> bool:
-        """Redis SET NX：首次返回 True，用于跨进程去重。"""
-        try:
-            result = await self._redis.set(key, "1", nx=True, ex=ttl)
-            return bool(result)
-        except Exception as e:
-            logger.warning("去重键写入失败，按首次处理: {}", e)
-            return True
-
-    async def forget_key(self, key: str) -> None:
-        try:
-            await self._redis.delete(key)
-        except Exception as e:
-            logger.warning("删除去重键失败: {}", e)
 
     async def add_message(self, session_id: str, message: Message) -> None:
         """追加一条消息并视需要触发压缩。"""
