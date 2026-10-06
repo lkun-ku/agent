@@ -7,14 +7,11 @@ from __future__ import annotations
 
 import importlib
 import json
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import ModuleType
-from typing import Any
-
-_FIXED_NOW: datetime | None = None
+from typing import Any, Protocol
 
 
 def normalize(value: datetime) -> datetime:
@@ -24,24 +21,22 @@ def normalize(value: datetime) -> datetime:
     return value
 
 
+class Clock(Protocol):
+    """业务时钟端口；注入使用，避免全局可变状态。"""
+
+    def now(self) -> datetime: ...
+
+
+class SystemClock:
+    """生产系统时钟。"""
+
+    def now(self) -> datetime:
+        return datetime.now()
+
+
 def now() -> datetime:
-    return _FIXED_NOW or datetime.now()
-
-
-@contextmanager
-def fixed_now(value: datetime | None) -> Iterator[None]:
-    """固定业务时钟，保证时效类规则可回归。"""
-    global _FIXED_NOW
-    old, _FIXED_NOW = _FIXED_NOW, normalize(value) if value else None
-    try:
-        yield
-    finally:
-        _FIXED_NOW = old
-
-
-def set_now(value: datetime | None) -> None:
-    global _FIXED_NOW
-    _FIXED_NOW = normalize(value) if value else None
+    """供纯函数/适配器使用的默认时钟。"""
+    return datetime.now()
 
 
 def to_cents(value: Decimal | float | str, field: str = "金额") -> int:
@@ -101,8 +96,9 @@ def lazy_exports(mapping: dict[str, str]) -> Callable[[str], Any]:
 
 
 __all__ = [
+    "Clock",
+    "SystemClock",
     "dumps",
-    "fixed_now",
     "import_string",
     "lazy_exports",
     "lazy_module",
@@ -110,7 +106,6 @@ __all__ = [
     "normalize",
     "now",
     "paid_cents",
-    "set_now",
     "to_cents",
     "yuan",
 ]

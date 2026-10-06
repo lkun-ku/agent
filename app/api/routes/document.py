@@ -188,8 +188,13 @@ async def upload_document(
                 await rag_pipeline.delete_chunks(chunk_ids)
             except Exception as cleanup_exc:  # noqa: BLE001
                 logger.error("向量回滚失败，需人工对账: {}", cleanup_exc)
+        if rag_pipeline is not None:
+            rag_pipeline.invalidate_keyword_index()
         logger.exception("文档入库失败: {}", exc)
         raise HTTPException(status_code=500, detail=f"文档入库失败: {exc!s}") from exc
+
+    if rag_pipeline is not None and indexed:
+        rag_pipeline.invalidate_keyword_index()
 
     message = "上传、分块并入库成功" if indexed else "上传并分块成功（向量入库失败，暂不可检索）"
     return DocumentUploadResponse(

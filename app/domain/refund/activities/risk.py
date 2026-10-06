@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from app.domain.refund.common import now, yuan
+from app.domain.refund.common import Clock, SystemClock, yuan
 from app.domain.refund.contracts import (
     CAP_ACCOUNT_AGE,
     CAP_ADDRESS_DETAIL,
@@ -306,10 +306,12 @@ def assess(
     stats: Stats | None = None,
     config: AppConfig = CONFIG,
     history_known: bool = False,
+    clock: Clock | None = None,
 ) -> Verdict:
     """规则打分；输出只影响建议/人工标记，不直接改状态。"""
     cfg, st = config.thresholds, stats or Stats()
-    s = Signals(rec, st, history_known, capabilities_of(rec, history_known), now=now())
+    current = (clock or SystemClock()).now()
+    s = Signals(rec, st, history_known, capabilities_of(rec, history_known), now=current)
     hits, skipped = [], []
     for spec in RULES:
         if not s.supports(spec.requires):

@@ -146,6 +146,10 @@ class _FailingCommitSession(_FakeSession):
 class _FakePipeline:
     def __init__(self) -> None:
         self.deleted: list[str] = []
+        self.invalidated = 0
+
+    def invalidate_keyword_index(self) -> None:
+        self.invalidated += 1
 
     async def index_document(
         self,
@@ -187,5 +191,6 @@ def test_db_commit_failure_cleans_indexed_vectors(
         assert session.rolled_back is True
         assert pipeline.deleted
         assert len(pipeline.deleted) == len(session.added) - 1
+        assert pipeline.invalidated == 1
     finally:
         app.dependency_overrides[get_async_session] = _fake_session

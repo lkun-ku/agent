@@ -18,7 +18,7 @@ from app.core.rag.retriever import _BM25Index
 from app.core.rag.store import KnowledgeStore
 from app.infrastructure.embeddings import get_embedder
 from app.infrastructure.llm.adapter import RouterLLM
-from app.infrastructure.llm.model_router import ModelConfig, ModelRouter
+from app.infrastructure.llm.factory import get_model_router
 from app.infrastructure.vectordb.milvus_client import MilvusManager
 from app.models.enums import RetrievalMode
 from app.models.schemas import RAGResponse, RetrievalResult
@@ -118,6 +118,13 @@ class RAGPipeline:
         if self._reranker is not None and len(combined) > 1:
             combined = await self._reranker.rerank(query, combined, top_k=top_k)
         return combined[:top_k]
+
+    def invalidate_keyword_index(self) -> None:
+        """文档变更后清除进程内 BM25 缓存，下次检索重建。"""
+        self._keyword_loaded = False
+        self._keyword_index.clear()
+        self._keyword_text.clear()
+        logger.info("RAG BM25 索引已失效，下次检索重建")
 
     async def _keyword_search(
         self,
@@ -219,6 +226,7 @@ def build_pipeline() -> RAGPipeline:
         host=settings.milvus_host,
         port=str(settings.milvus_port),
         alias="rag",
+        timeout=settings.milvus_timeout,
         **conn_kwargs,
     )
     store = KnowledgeStore(
@@ -227,19 +235,7 @@ def build_pipeline() -> RAGPipeline:
         collection=settings.rag_collection_name,
         dimension=embedder.dimension,
     )
-    router = ModelRouter(
-        [
-            ModelConfig(
-                model_id=settings.openai_model,
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_api_base or None,
-                thinking=settings.openai_thinking,
-            )
-        ],
-        max_retries=settings.llm_max_retries,
-        retry_base_delay=settings.llm_retry_base_delay,
-        retry_max_delay=settings.llm_retry_max_delay,
-    )
+    router = get_model_router()
     generator = RAGGenerator(RouterLLM(router), model_name=settings.openai_model)
 
     reranker = None

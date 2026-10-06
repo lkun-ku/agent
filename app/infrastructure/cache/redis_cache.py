@@ -55,17 +55,29 @@ class RedisCache:
         *,
         semantic_embedder: EmbedderLike | None = None,
         max_semantic_scan: int = 200,
+        socket_timeout: float = 5.0,
+        socket_connect_timeout: float = 5.0,
+        health_check_interval: int = 30,
     ) -> None:
         """
         :param url: Redis 连接 URL
         :param semantic_embedder: 可选，具备 ``encode(texts)->np.ndarray`` 的编码器
             （如 ``SentenceTransformer``）
         :param max_semantic_scan: 语义匹配时最多扫描的缓存条目数
+        :param socket_timeout: Redis 读/写超时秒数
+        :param socket_connect_timeout: Redis 建连超时秒数
+        :param health_check_interval: Redis health check 间隔秒数
         """
         if aioredis is None:
             raise RuntimeError("未安装 redis 包，请安装 redis>=5")
         self._url = url
-        self._client: Any = aioredis.from_url(url, decode_responses=True)
+        self._client: Any = aioredis.from_url(
+            url,
+            decode_responses=True,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=socket_connect_timeout,
+            health_check_interval=health_check_interval,
+        )
         self._semantic_embedder: EmbedderLike | None = semantic_embedder
         self._max_semantic_scan = max(1, max_semantic_scan)
         self._embed_lock = asyncio.Lock()

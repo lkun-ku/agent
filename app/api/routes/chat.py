@@ -36,11 +36,8 @@ from app.infrastructure.database.repositories import (
     TraceRepository,
     canonical_conversation_id,
 )
-from app.infrastructure.llm.model_router import (
-    ModelConfig,
-    ModelRouter,
-    build_thinking_extra,
-)
+from app.infrastructure.llm.factory import get_model_router
+from app.infrastructure.llm.model_router import ModelRouter, build_thinking_extra
 from app.infrastructure.trace.tracer import Tracer
 from app.models.schemas import (
     ChatRequest,
@@ -261,24 +258,11 @@ def _thinking_params() -> dict[str, Any]:
 
 
 def _build_router() -> ModelRouter:
-    """根据配置构造模型路由器。"""
+    """获取进程级模型路由器，保持连接池与熔断器状态。"""
     settings = get_settings()
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="未配置 OPENAI_API_KEY，无法调用模型")
-    cfg = ModelConfig(
-        model_id=settings.openai_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_api_base or None,
-        priority=0,
-        weight=1.0,
-        thinking=settings.openai_thinking,
-    )
-    return ModelRouter(
-        [cfg],
-        max_retries=settings.llm_max_retries,
-        retry_base_delay=settings.llm_retry_base_delay,
-        retry_max_delay=settings.llm_retry_max_delay,
-    )
+    return get_model_router()
 
 
 async def _try_rag(

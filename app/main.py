@@ -24,6 +24,7 @@ from app.core.tools import get_tool_registry
 from app.core.tools.factory import reset_tool_registry
 from app.infrastructure.cache.factory import close_redis_cache
 from app.infrastructure.database.session import configure_session, init_engine
+from app.infrastructure.llm.factory import reset_model_router
 
 
 def _configure_logging(level: str) -> None:
@@ -37,7 +38,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     _configure_logging(settings.log_level)
     logger.info("启动 {} ({})", settings.app_name, settings.app_env)
-    engine = init_engine(settings.database_url)
+    engine = init_engine(
+        settings.database_url,
+        connect_timeout=settings.database_connect_timeout,
+        command_timeout=settings.database_command_timeout,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+    )
     app.state.session_factory = configure_session(engine)
     app.state.engine = engine
 
@@ -54,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if sync_task is not None:
         sync_task.cancel()
     reset_tool_registry()
+    reset_model_router()
     await close_redis_cache()
     await engine.dispose()
     logger.info("关闭 {}", settings.app_name)

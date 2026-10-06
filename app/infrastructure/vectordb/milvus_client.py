@@ -52,12 +52,14 @@ class MilvusManager:
         host: str = "localhost",
         port: str = "19530",
         alias: str = "default",
+        *,
+        timeout: float = 10.0,
         **conn_kwargs: Any,
     ) -> None:
         self._host = host
         self._port = port
         self._alias = alias
-        self._conn_kwargs = conn_kwargs
+        self._conn_kwargs = {**conn_kwargs, "timeout": timeout}
         self._connected = False
 
     async def _ensure_connection(self) -> None:

@@ -66,7 +66,7 @@ uv run mypy app
 uv run pytest -q --cov=app --cov-report=term-missing
 ```
 
-当前基线：`105 passed`，其中退款相关 12 条；`mypy --strict` 通过；应用覆盖率基线为 `60%`。
+当前基线：`112 passed`，其中退款相关 12 条；`mypy --strict` 通过；应用覆盖率基线为 `61%`。
 
 ## 许可
 

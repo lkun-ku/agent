@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from loguru import logger
+from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -32,10 +33,34 @@ def normalize_async_database_url(url: str) -> str:
     return u
 
 
-def init_engine(database_url: str | None = None, **engine_kwargs: Any) -> AsyncEngine:
+def init_engine(
+    database_url: str | None = None,
+    *,
+    connect_timeout: float = 5.0,
+    command_timeout: float = 30.0,
+    pool_size: int = 10,
+    max_overflow: int = 10,
+    **engine_kwargs: Any,
+) -> AsyncEngine:
     """创建异步引擎（应用启动时调用一次）。"""
     url = normalize_async_database_url(database_url or _default_url)
-    kwargs = {"echo": False, "pool_pre_ping": True}
+    parsed_url = make_url(url)
+    kwargs: dict[str, Any] = {
+        "echo": False,
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+    }
+    if parsed_url.drivername == "postgresql+asyncpg":
+        kwargs.update(
+            {
+                "connect_args": {
+                    "timeout": connect_timeout,
+                    "command_timeout": command_timeout,
+                },
+                "pool_size": pool_size,
+                "max_overflow": max_overflow,
+            }
+        )
     kwargs.update(engine_kwargs)
     engine = create_async_engine(url, **kwargs)
     logger.info("数据库引擎已初始化（已隐藏凭据）")

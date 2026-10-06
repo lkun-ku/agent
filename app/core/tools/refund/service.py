@@ -14,7 +14,7 @@ from app.core.tools.refund.ports import RefundStore
 from app.core.tools.refund.rows import OpenTask, ReturnOrderRow
 from app.domain.refund.activities.dispatch import run_steps
 from app.domain.refund.activities.ingest import load_dataset
-from app.domain.refund.common import dumps, loads, now, yuan
+from app.domain.refund.common import Clock, SystemClock, dumps, loads, yuan
 from app.domain.refund.contracts import (
     ACTION_LABELS,
     QUEUE_LABELS,
@@ -62,14 +62,16 @@ class RefundService:
         data_dir: str | Path | None = None,
         *,
         seed: bool = True,
+        clock: Clock | None = None,
     ):
         self.store = store
+        self.clock = clock or SystemClock()
         if dataset is not None:
             self.dataset = dataset
         elif seed:
             self.dataset = load_dataset(data_dir=data_dir or "data/refund")
         else:
-            self.dataset = Dataset("", "", "分", now(), [])
+            self.dataset = Dataset("", "", "分", self.clock.now(), [])
         if seed:
             self.store.seed(self.dataset)
         # 客服系统可以动态推送新单据；内存索引与 dataset 保持同步，供查询/恢复使用
@@ -91,7 +93,7 @@ class RefundService:
                 dataset_id=f"runtime-{rec.refund_id}",
                 schema_version="runtime",
                 amount_unit="分",
-                produced_at=now(),
+                produced_at=self.clock.now(),
                 records=[rec],
             )
         )

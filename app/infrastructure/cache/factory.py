@@ -11,7 +11,13 @@ from app.infrastructure.cache.redis_cache import RedisCache
 @lru_cache(maxsize=1)
 def get_redis_cache() -> RedisCache:
     """进程级 Redis 缓存单例。"""
-    return RedisCache(get_settings().redis_url)
+    settings = get_settings()
+    return RedisCache(
+        settings.redis_url,
+        socket_timeout=settings.redis_socket_timeout,
+        socket_connect_timeout=settings.redis_socket_connect_timeout,
+        health_check_interval=settings.redis_health_check_interval,
+    )
 
 
 async def close_redis_cache() -> None:

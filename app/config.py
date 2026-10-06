@@ -147,6 +147,16 @@ class Settings(BaseSettings):
         description="语义分类采用的最低余弦相似度",
     )
 
+    # ---- 依赖超时与连接池 ----
+    redis_socket_timeout: float = Field(default=5.0, ge=1.0, le=60.0)
+    redis_socket_connect_timeout: float = Field(default=5.0, ge=1.0, le=60.0)
+    redis_health_check_interval: int = Field(default=30, ge=5, le=300)
+    database_connect_timeout: float = Field(default=5.0, ge=1.0, le=60.0)
+    database_command_timeout: float = Field(default=30.0, ge=1.0, le=300.0)
+    database_pool_size: int = Field(default=10, ge=1, le=100)
+    database_max_overflow: int = Field(default=10, ge=0, le=100)
+    milvus_timeout: float = Field(default=10.0, ge=1.0, le=120.0)
+
     # ---- LLM 重试（只影响瞬时网络错误；熔断器仍负责跨请求保护）----
     llm_max_retries: int = Field(default=1, ge=0, le=3, description="单模型最大重试次数")
     llm_retry_base_delay: float = Field(

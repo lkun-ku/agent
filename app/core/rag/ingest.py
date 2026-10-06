@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from app.config import get_settings
 
@@ -122,6 +122,58 @@ async def sync_knowledge_dir(*, force: bool = False, prune: bool = True) -> Sync
 
 
 async def _sync_knowledge_dir_locked(
+    *, force: bool = False, prune: bool = True
+) -> SyncReport:
+    """先获取数据库级锁，再执行单进程同步逻辑。"""
+    from app.infrastructure.database.session import (
+        async_session_factory,
+        configure_session,
+        init_engine,
+    )
+
+    if async_session_factory is None:
+        configure_session(init_engine())
+    factory = async_session_factory
+    if factory is None:  # pragma: no cover - 上一行已保证
+        raise RuntimeError("请先初始化数据库会话")
+
+    lock_session = factory()
+    lock_acquired = False
+    try:
+        lock_acquired = await _acquire_knowledge_sync_lock(lock_session)
+        if lock_acquired:
+            logger.info("已获取知识库同步 advisory lock")
+        return await _sync_knowledge_dir_body(force=force, prune=prune)
+    finally:
+        if lock_acquired:
+            try:
+                await _release_knowledge_sync_lock(lock_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("释放知识库同步 advisory lock 失败: {}", exc)
+        await lock_session.close()
+
+
+async def _acquire_knowledge_sync_lock(session: Any) -> bool:
+    """获取 PostgreSQL session-level advisory lock；SQLite 等测试库跳过。"""
+    if session.bind.dialect.name != "postgresql":
+        return False
+    await session.execute(
+        text("SELECT pg_advisory_lock(hashtext(:lock_key))"),
+        {"lock_key": "enterprise_agent:knowledge_sync"},
+    )
+    return True
+
+
+async def _release_knowledge_sync_lock(session: Any) -> None:
+    if session.bind.dialect.name != "postgresql":
+        return
+    await session.execute(
+        text("SELECT pg_advisory_unlock(hashtext(:lock_key))"),
+        {"lock_key": "enterprise_agent:knowledge_sync"},
+    )
+
+
+async def _sync_knowledge_dir_body(
     *, force: bool = False, prune: bool = True
 ) -> SyncReport:
     from app.infrastructure.database.models import Document, DocumentChunk
@@ -292,6 +344,9 @@ async def _sync_knowledge_dir_locked(
         # 清理（delete）分支没有逐条提交，这里统一提交一次；
         # 无变更时 commit 为空操作。
         await session.commit()
+
+    if report.added or report.updated or report.deleted:
+        rag.invalidate_keyword_index()
 
     logger.info("知识库目录同步完成 {}", report.summary())
     return report
