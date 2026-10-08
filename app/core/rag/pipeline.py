@@ -14,7 +14,7 @@ from loguru import logger
 
 from app.config import get_settings
 from app.core.rag.generator import RAGGenerator
-from app.core.rag.retriever import _BM25Index
+from app.core.rag.search import BM25Index, rrf_fuse
 from app.core.rag.store import KnowledgeStore
 from app.infrastructure.embeddings import get_embedder
 from app.infrastructure.llm.adapter import RouterLLM
@@ -43,7 +43,7 @@ class RAGPipeline:
         self._rerank_candidates = rerank_candidates
         self._retrieval_mode = retrieval_mode
         self._keyword_provider = keyword_provider
-        self._keyword_index = _BM25Index()
+        self._keyword_index = BM25Index()
         self._keyword_text: dict[str, str] = {}
         self._keyword_loaded = False
         self._keyword_lock = asyncio.Lock()
@@ -169,23 +169,7 @@ class RAGPipeline:
         k: int = 60,
     ) -> list[RetrievalResult]:
         """按 RRF 融合多路检索结果。"""
-        scores: dict[str, float] = {}
-        best_by_id: dict[str, RetrievalResult] = {}
-        for results in result_lists:
-            for rank, item in enumerate(results):
-                score = scores.get(item.id, 0.0) + 1.0 / (k + rank + 1)
-                scores[item.id] = score
-                if item.id not in best_by_id or item.score > best_by_id[item.id].score:
-                    best_by_id[item.id] = item
-
-        merged: list[RetrievalResult] = []
-        for item_id in sorted(scores, key=lambda key: scores[key], reverse=True)[:top_k]:
-            base = best_by_id[item_id].model_copy(deep=True)
-            base.score = scores[item_id]
-            base.metadata = {**base.metadata, "rrf": scores[item_id]}
-            base.source = "hybrid"
-            merged.append(base)
-        return merged
+        return rrf_fuse(result_lists, top_k=top_k, k=k)
 
     async def answer(
         self,

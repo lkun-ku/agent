@@ -19,6 +19,7 @@ from loguru import logger
 from sqlalchemy import delete, select, text
 
 from app.config import get_settings
+from app.core.rag.indexing import DocumentIndexingService
 
 KNOWLEDGE_SUFFIXES = {".txt", ".pdf", ".md", ".markdown", ".csv", ".log"}
 
@@ -267,75 +268,24 @@ async def _sync_knowledge_dir_body(
                 if rel in by_rel:
                     await remove_document(by_rel[rel])
 
-                etl = await _ingest_pipeline().run_bytes(
-                    path.read_bytes(),
-                    filename=Path(rel).name,
-                    mime_type=_MIME_BY_SUFFIX.get(Path(rel).suffix.lower()),
-                )
-                if not etl.chunks:
-                    report.errors.append(f"{rel}: 未解析出文本内容")
-                    continue
-
-                rag_pipeline = rag
-                # 稳定 ID：同一文档多次同步/重建时主键不变，配合 store 的先删后插实现幂等去重
-                doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"knowledge:{rel}"))
-                chunk_ids = [
-                    str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{i}"))
-                    for i in range(len(etl.chunks))
-                ]
-
-                # 1) 先落库（indexed_chunks 暂记 0），避免「向量写成功、数据库失败」产生孤儿向量
-                doc = Document(
-                    id=doc_id,
+                indexing_service = DocumentIndexingService(rag)
+                result = await indexing_service.index_bytes(
+                    session,
+                    content=path.read_bytes(),
+                    doc_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"knowledge:{rel}")),
                     filename=rel,
                     mime_type=_MIME_BY_SUFFIX.get(Path(rel).suffix.lower()),
                     storage_path=str(path),
-                    status="ready",
-                    meta={
-                        "knowledge": {"rel": rel, "sha256": digest},
-                        "chunk_count": len(etl.chunks),
-                        "indexed_chunks": 0,
-                    },
+                    metadata={"knowledge": {"rel": rel, "sha256": digest}},
+                    etl_filename=Path(rel).name,
                 )
-                session.add(doc)
-                chunk_rows: list[Any] = []
-                for index, (chunk_id, chunk_text) in enumerate(
-                    zip(chunk_ids, etl.chunks, strict=True)
-                ):
-                    chunk_row = DocumentChunk(
-                        id=chunk_id,
-                        document_id=doc_id,
-                        chunk_index=index,
-                        content=chunk_text[:65000],
-                        vector_id=None,
-                        meta=None,
-                    )
-                    session.add(chunk_row)
-                    chunk_rows.append(chunk_row)
-                await session.commit()
 
-                # 2) 再写向量；失败则保留 indexed_chunks=0，下次同步/启动自动回填
-                indexed = 0
-                try:
-                    indexed = await rag_pipeline.index_document(
-                        doc_id=doc_id,
-                        filename=rel,
-                        chunks=etl.chunks,
-                        chunk_ids=chunk_ids,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("向量写入失败 rel={} err={}", rel, exc)
-
-                if indexed:
-                    for chunk_row in chunk_rows:
-                        chunk_row.vector_id = chunk_row.id
-                    meta = dict(doc.meta or {})
-                    meta["indexed_chunks"] = indexed
-                    doc.meta = meta
-                    await session.commit()
+                if result.indexed:
                     (report.added if action == "add" else report.updated).append(rel)
                 else:
-                    report.errors.append(f"{rel}: 向量入库失败（文本已落库，下次同步自动回填）")
+                    report.errors.append(
+                        f"{rel}: 向量入库失败（文本已落库，下次同步自动回填）"
+                    )
             except Exception as exc:  # noqa: BLE001
                 await session.rollback()
                 logger.exception("同步文件失败 rel={}", rel)

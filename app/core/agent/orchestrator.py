@@ -101,7 +101,7 @@ class IntentContext:
 
 
 @dataclass
-class AgentResponse:
+class OrchestrationResult:
     """编排器对外统一响应。"""
 
     answer: str
@@ -171,7 +171,7 @@ class AgentOrchestrator:
         session_id: str,
         mode: str = "react",
         intent: IntentContext | None = None,
-    ) -> AgentResponse:
+    ) -> OrchestrationResult:
         """执行 Agent 编排：集成记忆、工具、追踪与可选反思。"""
         intent_ctx = intent or IntentContext()
         if intent_ctx.preferred_mode:
@@ -243,7 +243,7 @@ class AgentOrchestrator:
                     logger.warning("反思阶段失败，已跳过: %s", e)
                     self._tracer.log_event(trace_id, "reflection.skipped", {"error": str(e)})
 
-            resp = AgentResponse(
+            resp = OrchestrationResult(
                 answer=answer,
                 mode_used=mode_used,
                 success=success,
@@ -262,7 +262,7 @@ class AgentOrchestrator:
             error_msg = str(e)
             self._tracer.log_event(trace_id, "orchestrator.error", {"error": error_msg})
             self._tracer.end_span(span, error=e)
-            return AgentResponse(
+            return OrchestrationResult(
                 answer="",
                 mode_used="react",
                 success=False,

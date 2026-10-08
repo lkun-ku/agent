@@ -648,7 +648,15 @@ docker compose exec -T postgres psql -U postgres -d agent_db \
 | 变量 | 作用 | 生产建议 |
 |---|---|---|
 | `DATABASE_URL` | PostgreSQL DSN | 使用密钥管理；compose 内主机名为 `postgres` |
+| `DATABASE_CONNECT_TIMEOUT` | PostgreSQL 建连超时秒数 | 默认 5 |
+| `DATABASE_COMMAND_TIMEOUT` | PostgreSQL 命令超时秒数 | 默认 30 |
+| `DATABASE_POOL_SIZE` | 异步连接池常驻连接数 | 默认 10 |
+| `DATABASE_MAX_OVERFLOW` | 异步连接池最大溢出连接数 | 默认 10 |
 | `REDIS_URL` | Redis | 与 compose 服务名一致 |
+| `REDIS_SOCKET_TIMEOUT` | Redis 读写超时秒数 | 默认 5 |
+| `REDIS_SOCKET_CONNECT_TIMEOUT` | Redis 建连超时秒数 | 默认 5 |
+| `REDIS_HEALTH_CHECK_INTERVAL` | Redis health check 间隔秒数 | 默认 30 |
+| `MILVUS_TIMEOUT` | Milvus SDK 超时秒数 | 默认 10 |
 | `MILVUS_HOST/PORT` | Milvus | compose 内为 `milvus:19530` |
 | `OPENAI_API_KEY` | DeepSeek Key | 注入 Secret，不入库/不入镜像 |
 | `OPENAI_MODEL` | 模型名 | 固定版本，避免行为漂移 |

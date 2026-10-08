@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlite_store import Store
 
 from app.api.routes import chat as chat_route
+from app.core.chat import service as chat_service
 from app.core.intent.recognizer import IntentRecognizer, is_refund_action
 from app.core.tools import ToolRegistry
 from app.core.tools.refund import AgentService, RefundService, RefundTool
@@ -99,12 +100,12 @@ def test_chat_entry_uses_refund_tool_without_llm_key(
     registry = ToolRegistry()
     registry.register(tool)
     monkeypatch.setattr(
-        chat_route,
+        chat_service,
         "get_tool_registry",
         lambda: registry,
     )
     monkeypatch.setattr(
-        chat_route,
+        chat_service,
         "get_settings",
         lambda: type(
             "S",

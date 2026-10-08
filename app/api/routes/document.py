@@ -14,9 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.rag.indexing import DocumentIndexingService
 from app.core.rag.pipeline import get_pipeline
-from app.etl import ETLPipeline
-from app.infrastructure.database.models import Document, DocumentChunk
+from app.infrastructure.database.models import Document
 from app.infrastructure.database.session import get_async_session
 from app.models.schemas import DocumentInfo, DocumentUploadResponse
 
@@ -124,84 +124,34 @@ async def upload_document(
         logger.exception("保存上传文件失败: {}", exc)
         raise HTTPException(status_code=500, detail=f"保存文件失败: {exc!s}") from exc
 
-    pipeline = ETLPipeline()
+    rag_pipeline = await get_pipeline()
+    indexing_service = DocumentIndexingService(rag_pipeline)
     try:
-        etl = await pipeline.run_bytes(raw, filename=safe_name, mime_type=mime)
-    except Exception as exc:
-        _safe_unlink(dest)
-        logger.exception("ETL 失败: {}", exc)
-        raise HTTPException(status_code=422, detail=f"文档解析失败: {exc!s}") from exc
-
-    if not etl.chunks:
-        _safe_unlink(dest)
-        raise HTTPException(status_code=422, detail="未能从文档中解析出任何文本内容")
-
-    # 先写向量库（失败不影响文档落库，仅标记未索引）
-    chunk_ids = [str(uuid.uuid4()) for _ in etl.chunks]
-    indexed = 0
-    rag_pipeline: Any | None = None
-    try:
-        rag_pipeline = await get_pipeline()
-        if rag_pipeline is not None:
-            indexed = await rag_pipeline.index_document(
-                doc_id=doc_id,
-                filename=safe_name,
-                chunks=etl.chunks,
-                chunk_ids=chunk_ids,
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("向量入库失败（文档仍会写入数据库）: {}", exc)
-
-    doc = Document(
-        id=doc_id,
-        filename=safe_name,
-        mime_type=mime,
-        storage_path=str(dest),
-        status="ready",
-        meta={
-            "chunk_count": len(etl.chunks),
-            "indexed_chunks": indexed,
-            "sha256": digest,
-        },
-    )
-    session.add(doc)
-
-    for i, (chunk_id, chunk_text) in enumerate(zip(chunk_ids, etl.chunks, strict=True)):
-        chunk = DocumentChunk(
-            id=chunk_id,
-            document_id=doc_id,
-            chunk_index=i,
-            content=chunk_text[:65000],
-            vector_id=chunk_id if indexed else None,
-            meta=None,
+        result = await indexing_service.index_bytes(
+            session,
+            content=raw,
+            doc_id=doc_id,
+            filename=safe_name,
+            mime_type=mime,
+            storage_path=dest,
+            metadata={"sha256": digest},
         )
-        session.add(chunk)
-
-    try:
-        await session.commit()
-    except Exception as exc:
-        await session.rollback()
+    except ValueError as exc:
         _safe_unlink(dest)
-        # 数据库回滚时同步清理已写入的向量，避免“库无记录、向量残留”的孤儿数据。
-        if rag_pipeline is not None and indexed:
-            try:
-                await rag_pipeline.delete_chunks(chunk_ids)
-            except Exception as cleanup_exc:  # noqa: BLE001
-                logger.error("向量回滚失败，需人工对账: {}", cleanup_exc)
-        if rag_pipeline is not None:
-            rag_pipeline.invalidate_keyword_index()
+        logger.warning("文档解析无内容: {}", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _safe_unlink(dest)
         logger.exception("文档入库失败: {}", exc)
         raise HTTPException(status_code=500, detail=f"文档入库失败: {exc!s}") from exc
 
-    if rag_pipeline is not None and indexed:
-        rag_pipeline.invalidate_keyword_index()
-
+    indexed = result.indexed
     message = "上传、分块并入库成功" if indexed else "上传并分块成功（向量入库失败，暂不可检索）"
     return DocumentUploadResponse(
         document_id=doc_id,
         filename=safe_name,
         status="ready",
-        chunk_count=len(etl.chunks),
+        chunk_count=result.chunk_count,
         indexed_chunks=indexed,
         message=message,
     )

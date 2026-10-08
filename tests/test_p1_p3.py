@@ -11,6 +11,9 @@ import pytest
 
 from app.api.routes import chat as chat_route
 from app.core.agent.adapters import RegistryToolInvoker, RouterLLMProvider
+from app.core.chat import service as chat_service_module
+from app.core.chat.service import ChatApplicationService
+from app.core.intent.recognizer import IntentRecognizer
 from app.core.rag.pipeline import RAGPipeline
 from app.core.tools.schemas import ToolResult
 from app.infrastructure.database.repositories import (
@@ -19,9 +22,9 @@ from app.infrastructure.database.repositories import (
     canonical_conversation_id,
 )
 from app.infrastructure.llm.adapter import RouterLLM
-from app.infrastructure.trace.tracer import TraceRecord, TraceSpan
+from app.infrastructure.trace.tracer import Tracer, TraceRecord, TraceSpan
 from app.models.enums import RetrievalMode
-from app.models.schemas import ChatMessage, RetrievalResult
+from app.models.schemas import ChatMessage, RAGResponse, RetrievalResult
 
 
 class _FakeStore:
@@ -239,21 +242,22 @@ async def test_rag_cache_get_set_roundtrip(
             assert ttl > 0
 
     fake = FakeRedis()
-    monkeypatch.setattr(chat_route, "get_redis_cache", lambda: fake)
+    monkeypatch.setattr(chat_service_module, "get_redis_cache", lambda: fake)
 
     request = chat_route.ChatRequest(
         messages=[ChatMessage(role="user", content="退款政策")]
     )
-    key = chat_route._rag_cache_key(request)
-    assert await chat_route._get_cached_rag(key) is None
+    chat_service = ChatApplicationService(Tracer(), IntentRecognizer())
+    key = chat_service.rag_cache_key(request)
+    assert await chat_service.get_cached_rag(key) is None
 
-    response = chat_route.RAGResponse(
+    response = RAGResponse(
         answer="七天可退",
         model="deepseek-flash",
     )
-    await chat_route._store_cached_rag(key, response)
+    await chat_service.store_cached_rag(key, response)
 
-    cached = await chat_route._get_cached_rag(key)
+    cached = await chat_service.get_cached_rag(key)
     assert cached is not None
     assert cached["content"] == "七天可退"
 
@@ -269,13 +273,14 @@ def test_rag_cache_key_changes_with_retrieval_mode(
         "rag_retrieval_mode",
         "vector",
     )
-    first = chat_route._rag_cache_key(request)
+    chat_service = ChatApplicationService(Tracer(), IntentRecognizer())
+    first = chat_service.rag_cache_key(request)
     monkeypatch.setattr(
         chat_route.get_settings(),
         "rag_retrieval_mode",
         "hybrid",
     )
-    second = chat_route._rag_cache_key(request)
+    second = chat_service.rag_cache_key(request)
     assert first != second
 
 
