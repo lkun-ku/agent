@@ -82,6 +82,13 @@ class RedisCache:
         self._max_semantic_scan = max(1, max_semantic_scan)
         self._embed_lock = asyncio.Lock()
 
+    async def ping(self) -> bool:
+        """检查 Redis 连接。"""
+        try:
+            return bool(await self._client.ping())
+        except Exception:
+            raise
+
     async def get(self, key: str) -> str | None:
         """按键获取字符串值。"""
         try:

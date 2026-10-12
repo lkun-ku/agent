@@ -61,8 +61,9 @@
 | 对象存储 | MinIO | compose `minio/minio:latest`，Milvus 依赖 |
 | 协调服务 | etcd | compose `quay.io/coreos/etcd:v3.5.5`，Milvus 依赖 |
 | 前端 | 无独立 SPA/Node 构建 | 服务端内嵌 HTML：`/`、`/ui`、`/docs`、`/diag` |
-| 日志 | loguru | 输出到 stderr，`LOG_LEVEL` 控制 |
-| 追踪 | 自研内存 Tracer | `trace_id` 返回给调用方；无外部 APM |
+| 日志 | loguru | stderr，支持 `LOG_JSON`；`LOG_LEVEL` 控制 |
+| 追踪 | 自研 Tracer + TraceLog | `trace_id` 返回调用方；Span 持久化到 PostgreSQL |
+| 指标 | prometheus-client | `/api/v1/metrics` |
 | 容器 | Dockerfile + docker-compose | `python:3.12-slim`，单 app 容器 |
 | 测试 | pytest / pytest-asyncio | `>=8.0` / `>=0.24` |
 | 静态检查 | ruff / mypy | `>=0.8` / `>=1.13` |
@@ -272,7 +273,9 @@ python main.py serve
 | 方法 | 路径 | 功能 | 依赖 |
 |---|---|---|---|
 | GET | `/api/v1/health` | 存活探针 | 无 |
-| GET | `/api/v1/health/ready` | 数据库就绪探针 | PostgreSQL |
+| GET | `/api/v1/health/ready` | PostgreSQL/Redis/Milvus 依赖矩阵 | PostgreSQL；Redis/Milvus 按开关 |
+| GET | `/api/v1/metrics` | Prometheus 指标 | 服务自身 |
+| GET | `/api/v1/version` | 应用版本与运行环境 | 服务自身 |
 | GET | `/api/v1/documents` | 列出已入库文档 | PostgreSQL |
 | POST | `/api/v1/documents/upload` | 上传单个 TXT/PDF/Markdown 并入库 | PostgreSQL + Milvus |
 | POST | `/api/v1/documents/sync-knowledge` | 扫描 `knowledge/` 增量同步/清理 | PostgreSQL + Milvus |
@@ -486,6 +489,12 @@ REFUND_SEED_DATASET=false
 - `app/infrastructure/vectordb/milvus_client.py`：集合创建/插入/检索/删除。
 - `app/infrastructure/database/`：SQLAlchemy 模型、异步会话、会话/Trace 仓储。
 - `app/infrastructure/trace/tracer.py`：内存 span，`/chat` 返回 `trace_id`。
+- `app/infrastructure/observability/`：trace context、Prometheus 指标；HTTP 中间件记录 QPS/延迟/错误。
+- `/api/v1/metrics`：Prometheus 抓取端点。
+- `/api/v1/health/ready`：PostgreSQL/Redis/Milvus 依赖矩阵；PostgreSQL 是关键依赖。
+- `/api/v1/version`：应用版本与运行环境。
+- `LOG_JSON=true` 输出结构化日志，采集系统可直接解析。
+- `TRACE_LOG_RETENTION_DAYS` / `CONVERSATION_LOG_RETENTION_DAYS` 控制排障数据保留期；Trace payload 会脱敏常见凭据字段。
 - `app/infrastructure/cache/factory.py` + `redis_cache.py`：RAG 结果缓存，已接 `/chat` 主链路。
 
 ### 5.9 CLI
@@ -571,7 +580,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`112 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率基线为 `61%`。
+当前基线：`117 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率基线约 `61%`。
 
 测试目录：
 
@@ -579,7 +588,8 @@ python -m pytest -q -m integration
 tests/
 ├── test_cli.py / test_document.py / test_ingest.py
 ├── test_memory.py / test_model_router.py / test_planner.py
-├── test_p1_p3.py / test_rag_pipeline.py / test_retriever.py / test_retry_policy.py
+├── test_p1_p3.py / test_phase1.py / test_phase3.py
+├── test_rag_pipeline.py / test_retriever.py / test_retry_policy.py
 ├── test_schema_validation.py / test_rag_validation.py / test_web.py
 └── refund/
     ├── test_dataset.py        # 264 条动作一致
@@ -592,8 +602,10 @@ tests/
 
 ### 7.2 日志与追踪
 
-- 日志：loguru 输出到 stderr；级别由 `LOG_LEVEL` 控制。
-- 请求追踪：`/chat` 返回 `trace_id`；`Tracer` 存在进程内存，不持久化。
+- 日志：loguru 输出到 stderr；级别由 `LOG_LEVEL` 控制，`LOG_JSON=true` 输出结构化 JSON，并自动绑定 `trace_id` / `conversation_id`。
+- 请求追踪：`/chat` 返回 `trace_id`；`Tracer` 记录子 Span，并持久化到 `trace_logs`。
+- 指标：`/api/v1/metrics` 暴露 HTTP QPS/延迟/错误、chat 模式分布、RAG cache hit/miss 与依赖错误计数。
+- 保留策略：`trace_logs` 默认保留 30 天，`messages` 默认保留 90 天。
 - 健康/诊断：
   - `/api/v1/health`：存活；
   - `/api/v1/health/ready`：PostgreSQL 就绪；
@@ -671,6 +683,9 @@ docker compose exec -T postgres psql -U postgres -d agent_db \
 | `REFUND_ENABLED` | 是否注册退款工具 | 默认 `false`；灰度时再开 |
 | `REFUND_SEED_DATASET` | 是否 seed 264 条演示数据 | 生产必须 `false` |
 | `LOG_LEVEL` | 日志级别 | `INFO`，排障临时 `DEBUG` |
+| `LOG_JSON` | 是否 JSON 结构化日志 | 生产采集建议 `true` |
+| `TRACE_LOG_RETENTION_DAYS` | TraceLog 保留天数 | 默认 30 |
+| `CONVERSATION_LOG_RETENTION_DAYS` | 会话消息保留天数 | 默认 90 |
 
 `docker-compose.yml` 已透传会话持久化、TraceLog、RAG 缓存、检索模式、Orchestrator 与退款开关；新增配置时同步 `.env.example` 和 compose。
 

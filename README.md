@@ -66,7 +66,7 @@ uv run mypy app
 uv run pytest -q --cov=app --cov-report=term-missing
 ```
 
-当前基线：`112 passed`，其中退款相关 12 条；`mypy --strict` 通过；应用覆盖率基线为 `61%`；主链路已收敛到 `app/core/chat/service.py` 与 `app/core/rag/search.py`。
+当前基线：`117 passed`，其中退款相关 12 条；`mypy --strict` 通过；应用覆盖率基线约 `61%`；已接入 Prometheus 指标、JSON 日志、依赖健康矩阵与 Trace 保留策略。
 
 ## 许可
 

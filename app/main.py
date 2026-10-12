@@ -14,7 +14,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import FastAPI
+import time
+import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from fastapi import FastAPI, Request, Response
 from loguru import logger
 
 from app.api.routes import chat, document, health, web
@@ -23,20 +28,49 @@ from app.config import get_settings
 from app.core.tools import get_tool_registry
 from app.core.tools.factory import reset_tool_registry
 from app.infrastructure.cache.factory import close_redis_cache
+from app.infrastructure.database.repositories import (
+    ObservabilityRetentionService,
+)
 from app.infrastructure.database.session import configure_session, init_engine
 from app.infrastructure.llm.factory import reset_model_router
+from app.infrastructure.observability.context import (
+    reset_trace_context,
+    set_trace_context,
+)
+from app.infrastructure.observability.metrics import (
+    HTTP_DURATION,
+    HTTP_ERRORS,
+    HTTP_REQUESTS,
+)
 
 
-def _configure_logging(level: str) -> None:
-    """按 LOG_LEVEL 初始化 loguru，未配置时默认 INFO。"""
+def _configure_logging(level: str, *, json_logs: bool = False) -> None:
+    """按 LOG_LEVEL 初始化 loguru；结构化模式供采集器使用。"""
     logger.remove()
-    _ = logger.add(sys.stderr, level=(level or "INFO").upper())
+
+    def _patch(record: Any) -> None:
+        from app.infrastructure.observability.context import (
+            current_conversation_id,
+            current_trace_id,
+        )
+
+        record["extra"]["trace_id"] = current_trace_id()
+        record["extra"]["conversation_id"] = current_conversation_id()
+
+    logger.configure(patcher=_patch)
+    _ = logger.add(
+        sys.stderr,
+        level=(level or "INFO").upper(),
+        serialize=json_logs,
+        backtrace=False,
+        diagnose=False,
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    _configure_logging(settings.log_level)
+    _configure_logging(settings.log_level, json_logs=settings.log_json)
     logger.info("启动 {} ({})", settings.app_name, settings.app_env)
     engine = init_engine(
         settings.database_url,
@@ -56,6 +90,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_registry = get_tool_registry()
     app.state.tool_registry = tool_registry
     logger.info("Agent 工具: {}", tool_registry.list_tool_names())
+
+    retention_service = ObservabilityRetentionService(app.state.session_factory)
+    try:
+        retention = await retention_service.cleanup(
+            trace_retention_days=settings.trace_log_retention_days,
+            conversation_retention_days=settings.conversation_log_retention_days,
+        )
+        if retention["trace_logs"] or retention["messages"]:
+            logger.info("可观测性数据清理完成: {}", retention)
+    except Exception as exc:
+        logger.warning("可观测性数据清理失败（不影响启动）: {}", exc)
 
     yield
     if sync_task is not None:
@@ -111,6 +156,43 @@ def create_app() -> FastAPI:
     application.include_router(document.router, prefix=settings.api_prefix)
     # 根路径页面（首页 / 聊天演示）不挂 API 前缀
     application.include_router(web.router)
+
+    @application.middleware("http")
+    async def observe_http(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        path = request.url.path
+        if path == f"{settings.api_prefix}/metrics":
+            return await call_next(request)
+
+        trace_id = request.headers.get("x-trace-id") or str(uuid.uuid4())
+        conversation_id = request.headers.get("x-conversation-id")
+        tokens = set_trace_context(trace_id, conversation_id)
+        started_at = time.perf_counter()
+        response: Response | None = None
+        try:
+            response = await call_next(request)
+        except Exception:
+            HTTP_ERRORS.labels(route=path).inc()
+            raise
+        finally:
+            HTTP_DURATION.labels(method=request.method, route=path).observe(
+                time.perf_counter() - started_at
+            )
+            reset_trace_context(tokens)
+
+        HTTP_REQUESTS.labels(
+            method=request.method,
+            route=path,
+            status=str(response.status_code),
+        ).inc()
+        if "x-trace-id" not in response.headers:
+            response.headers["x-trace-id"] = trace_id
+        if conversation_id and "x-conversation-id" not in response.headers:
+            response.headers["x-conversation-id"] = conversation_id
+        return response
+
     return application
 
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
@@ -29,7 +31,13 @@ from app.infrastructure.database.repositories import (
 )
 from app.infrastructure.llm.factory import get_model_router
 from app.infrastructure.llm.model_router import ModelRouter
-from app.infrastructure.trace.tracer import Tracer
+from app.infrastructure.observability.context import set_trace_context
+from app.infrastructure.observability.metrics import (
+    CHAT_DURATION,
+    CHAT_REQUESTS,
+    RAG_CACHE_REQUESTS,
+)
+from app.infrastructure.trace.tracer import Tracer, TraceSpan
 from app.models.schemas import ChatRequest, ChatResponse, Citation, RAGResponse
 
 if TYPE_CHECKING:
@@ -65,6 +73,8 @@ class ChatApplicationService:
         conversation_id = self.canonical_conversation_id(
             request.conversation_id or trace_id
         )
+        started_at = time.perf_counter()
+        context_tokens = set_trace_context(trace_id, conversation_id)
 
         async def finish(response: ChatResponse, mode: str) -> ChatResponse:
             await self.persist_chat(
@@ -74,6 +84,10 @@ class ChatApplicationService:
                 mode=mode,
             )
             await self.persist_trace(trace_id)
+            CHAT_REQUESTS.labels(route="chat", mode=mode).inc()
+            CHAT_DURATION.labels(route="chat").observe(
+                time.perf_counter() - started_at
+            )
             return response
 
         user_text = request.messages[-1].content if request.messages else ""
@@ -91,7 +105,11 @@ class ChatApplicationService:
             if clarify and intent.confidence < self._intent.confidence_threshold:
                 messages.append({"role": "system", "content": f"（系统提示：{clarify}）"})
 
-            refund_result = await self.try_refund(user_text, intent)
+            refund_result = await self._tracked_call(
+                trace_id,
+                "refund_route",
+                lambda: self.try_refund(user_text, intent),
+            )
             if refund_result is not None:
                 self._tracer.end_span(
                     span,
@@ -102,26 +120,40 @@ class ChatApplicationService:
                     "refund_tool",
                 )
 
-            agent_response = await self.try_orchestrator(
-                user_text,
-                intent,
+            agent_response = await self._tracked_call(
                 trace_id,
-                conversation_id,
+                "agent_orchestrator",
+                lambda: self.try_orchestrator(
+                    user_text,
+                    intent,
+                    trace_id,
+                    conversation_id,
+                ),
             )
             if agent_response is not None:
                 self._tracer.end_span(span, result={"mode": "agent_orchestrator"})
                 return await finish(agent_response, "agent_orchestrator")
 
             cache_key = self.rag_cache_key(request)
-            cached = await self.get_cached_rag(cache_key)
+            cached = await self._tracked_call(
+                trace_id,
+                "rag_cache_get",
+                lambda: self.get_cached_rag(cache_key),
+            )
             if cached is not None:
+                RAG_CACHE_REQUESTS.labels(result="hit").inc()
                 self._tracer.end_span(span, result={"mode": "rag_cache"})
                 return await finish(
                     self._cached_response(cached, trace_id, conversation_id),
                     "rag_cache",
                 )
+            RAG_CACHE_REQUESTS.labels(result="miss").inc()
 
-            rag_response = await self.try_rag(user_text, messages)
+            rag_response = await self._tracked_call(
+                trace_id,
+                "rag_pipeline",
+                lambda: self.try_rag(user_text, messages),
+            )
             if rag_response is not None:
                 await self.store_cached_rag(cache_key, rag_response)
                 self._tracer.end_span(
@@ -137,20 +169,48 @@ class ChatApplicationService:
                     "rag",
                 )
 
-            response = await self._plain_llm_response(
-                request,
-                messages,
+            response = await self._tracked_call(
                 trace_id,
-                conversation_id,
+                "plain_llm",
+                lambda: self._plain_llm_response(
+                    request,
+                    messages,
+                    trace_id,
+                    conversation_id,
+                ),
             )
             self._tracer.end_span(
                 span,
                 result={"model": response.model, "usage": response.usage},
             )
             return await finish(response, "llm")
-        except Exception:
-            await self.persist_trace(trace_id)
+        finally:
+            from app.infrastructure.observability.context import reset_trace_context
+
+            reset_trace_context(context_tokens)
+            trace_record = self._tracer.get_trace(trace_id)
+            if trace_record is not None:
+                root_span = trace_record.spans[0]
+                if root_span.end_time is None:
+                    self._tracer.end_span(
+                        root_span,
+                        result={"status": "completed"},
+                    )
+
+    async def _tracked_call(
+        self,
+        trace_id: str,
+        operation: str,
+        func: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """在子 Span 中执行一次异步调用，记录耗时与错误。"""
+        span: TraceSpan = self._tracer.start_child_span(trace_id, operation)
+        try:
+            return await func()
+        except Exception as exc:
+            self._tracer.end_span(span, error=str(exc))
             raise
+        self._tracer.end_span(span, result={"status": "ok"})
 
     @staticmethod
     def canonical_conversation_id(value: str) -> str:

@@ -178,6 +178,19 @@ class Settings(BaseSettings):
     )
 
     log_level: str = Field(default="INFO", description="日志级别")
+    log_json: bool = Field(default=False, description="是否输出 JSON 结构化日志")
+    trace_log_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        description="TraceLog 保留天数",
+    )
+    conversation_log_retention_days: int = Field(
+        default=90,
+        ge=1,
+        le=3650,
+        description="Conversation/Message 保留天数",
+    )
 
 
 @lru_cache

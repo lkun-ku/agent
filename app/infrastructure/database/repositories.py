@@ -3,17 +3,43 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.infrastructure.database.models import Conversation, Message, TraceLog
 from app.infrastructure.trace.tracer import TraceRecord
 
 _CONVERSATION_NAMESPACE = uuid.UUID("4f8c3af8-9c58-4c8b-8840-4f68f7f54c9c")
+_SENSITIVE_KEYS = {
+    "authorization",
+    "api_key",
+    "apikey",
+    "token",
+    "access_token",
+    "refresh_token",
+    "password",
+    "secret",
+}
+
+
+def redact_payload(value: Any) -> Any:
+    """递归脱敏常见凭据字段；业务文本保留，便于排障。"""
+    if isinstance(value, dict):
+        return {
+            key: "***"
+            if str(key).lower() in _SENSITIVE_KEYS
+            else redact_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_payload(item) for item in value)
+    return value
 
 
 def canonical_conversation_id(value: str) -> str:
@@ -175,7 +201,7 @@ class TraceRepository:
                     trace_id=record.trace_id,
                     span_id=span.span_id,
                     operation=span.operation,
-                    payload=span.result or {},
+                    payload=redact_payload(span.result or {}),
                     error=span.error,
                     duration_ms=duration_ms,
                 )
@@ -188,6 +214,44 @@ class TraceRepository:
             await session.commit()
         return len(rows)
 
+    async def prune_before(self, retention_days: int) -> int:
+        """删除保留期之前的 TraceLog，返回删除行数。"""
+        cutoff = datetime.now(UTC) - timedelta(days=max(1, retention_days))
+        async with self._sessions() as session:
+            result = await session.execute(
+                delete(TraceLog).where(TraceLog.created_at < cutoff)
+            )
+            await session.commit()
+            return int(cast("CursorResult[Any]", result).rowcount or 0)
+
+
+class ObservabilityRetentionService:
+    """按保留策略清理 Trace 与会话消息。"""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._trace_repository = TraceRepository(session_factory)
+        self._sessions = session_factory
+
+    async def cleanup(
+        self,
+        *,
+        trace_retention_days: int,
+        conversation_retention_days: int,
+    ) -> dict[str, int]:
+        trace_deleted = await self._trace_repository.prune_before(trace_retention_days)
+        message_cutoff = datetime.now(UTC) - timedelta(
+            days=max(1, conversation_retention_days)
+        )
+        async with self._sessions() as session:
+            message_result = await session.execute(
+                delete(Message).where(Message.created_at < message_cutoff)
+            )
+            await session.commit()
+        return {
+            "trace_logs": trace_deleted,
+            "messages": int(cast("CursorResult[Any]", message_result).rowcount or 0),
+        }
+
 
 def utc_now_iso() -> str:
     """供仓储测试与日志使用的稳定 UTC 时间格式。"""
@@ -197,10 +261,10 @@ def utc_now_iso() -> str:
 __all__ = [
     "ConversationMemory",
     "ConversationRepository",
+    "ObservabilityRetentionService",
     "TraceRepository",
     "canonical_conversation_id",
+    "redact_payload",
     "utc_now_iso",
 ]
 
-# 显式导出 Sequence 仅为类型工具友好；运行时不使用。
-_ = Sequence

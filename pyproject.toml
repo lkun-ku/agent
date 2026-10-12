@@ -26,6 +26,7 @@ dependencies = [
     "sentence-transformers>=3.3.0",
     "httpx>=0.28.0",
     "loguru>=0.7.0",
+    "prometheus-client>=0.21.0",
     "pypdf>=5.0.0",
     "openai>=1.60.0",
     "numpy>=2.0.0",
