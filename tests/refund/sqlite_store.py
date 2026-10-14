@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.core.tools.refund.rows import OpenTask, PendingTask, ReturnOrderRow
-from app.domain.refund.common import now
+from app.domain.refund.activities.ingest import parse_record
+from app.domain.refund.common import loads, now
 from app.domain.refund.contracts import (
     ALLOWED_TRANSITIONS,
     QUEUE_LABELS,
@@ -159,6 +160,25 @@ class Store:
             (rec.order_id,),
         )
         return open_case["return_id"] if open_case else None
+
+    def load_record(
+        self,
+        *,
+        refund_id: str | None = None,
+        order_id: str | None = None,
+    ) -> Record | None:
+        if not refund_id and not order_id:
+            return None
+        row = self._one(
+            "SELECT raw_json FROM refund_requests "
+            "WHERE (? <> '' AND refund_id=?) OR (? <> '' AND order_id=?) "
+            "ORDER BY refund_id LIMIT 1",
+            (refund_id or "", refund_id or "", order_id or "", order_id or ""),
+        )
+        raw = loads(row["raw_json"]) if row else None
+        if not isinstance(raw, dict) or not raw:
+            return None
+        return parse_record(raw)
 
     def mark_request(self, refund_id: str, return_id: str, action_code: str) -> None:
         self._tx(

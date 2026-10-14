@@ -62,18 +62,11 @@ class AgentService:
             self.refund.register(rec)
             return rec
         if request.refund_id:
-            found = self.refund.records.get(request.refund_id)
+            found = self.refund.find_record(refund_id=request.refund_id)
             if found is None:
                 raise KeyError(f"未找到退款单 {request.refund_id}")
             return found
-        found = next(
-            (
-                record
-                for record in self.refund.records.values()
-                if record.order_id == request.order_id
-            ),
-            None,
-        )
+        found = self.refund.find_record(order_id=request.order_id)
         if found is None:
             raise KeyError(f"未找到订单 {request.order_id}")
         return found

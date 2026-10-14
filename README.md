@@ -25,6 +25,7 @@ copy .env.example .env
 ```powershell
 docker compose up -d postgres redis
 python main.py init-db
+uv run alembic upgrade head
 python main.py doctor
 python main.py serve
 ```
@@ -66,7 +67,7 @@ uv run mypy app
 uv run pytest -q --cov=app --cov-report=term-missing
 ```
 
-当前基线：`117 passed`，其中退款相关 12 条；`mypy --strict` 通过；应用覆盖率基线约 `61%`；已接入 Prometheus 指标、JSON 日志、依赖健康矩阵与 Trace 保留策略。
+当前基线：`128 passed`，其中退款相关 12 条；`mypy --strict` 通过；应用覆盖率约 `63%`；已接入 Alembic、API Key、Prometheus 指标、JSON 日志、依赖健康矩阵、Trace 保留策略和 HTTP 支付网关适配。
 
 ## 许可
 

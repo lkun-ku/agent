@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from loguru import logger
 
 from app.api.routes import chat, document, health, web
@@ -42,6 +42,7 @@ from app.infrastructure.observability.metrics import (
     HTTP_ERRORS,
     HTTP_REQUESTS,
 )
+from app.infrastructure.security.auth import require_api_key
 
 
 def _configure_logging(level: str, *, json_logs: bool = False) -> None:
@@ -152,8 +153,16 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
     application.include_router(health.router, prefix=settings.api_prefix)
-    application.include_router(chat.router, prefix=settings.api_prefix)
-    application.include_router(document.router, prefix=settings.api_prefix)
+    application.include_router(
+        chat.router,
+        prefix=settings.api_prefix,
+        dependencies=[Depends(require_api_key)],
+    )
+    application.include_router(
+        document.router,
+        prefix=settings.api_prefix,
+        dependencies=[Depends(require_api_key)],
+    )
     # 根路径页面（首页 / 聊天演示）不挂 API 前缀
     application.include_router(web.router)
 

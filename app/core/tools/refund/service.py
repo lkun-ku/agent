@@ -218,10 +218,33 @@ class RefundService:
         return self._apply(rec, outcome, return_id)
 
     def submit_refund_id(self, refund_id: str) -> CaseView:
-        rec = self.records.get(refund_id)
+        rec = self.find_record(refund_id=refund_id)
         if rec is None:
             raise KeyError(f"未找到退款单 {refund_id}")
         return self.submit_record(rec)
+
+    def find_record(
+        self,
+        *,
+        refund_id: str | None = None,
+        order_id: str | None = None,
+    ) -> Record | None:
+        """优先使用运行时索引；未 seed 时从 refund_requests 原始快照恢复。"""
+        if refund_id:
+            rec = self.records.get(refund_id)
+            if rec is not None:
+                return rec
+        if order_id:
+            rec = next(
+                (item for item in self.records.values() if item.order_id == order_id),
+                None,
+            )
+            if rec is not None:
+                return rec
+        rec = self.store.load_record(refund_id=refund_id, order_id=order_id)
+        if rec is not None:
+            self.records[rec.refund_id] = rec
+        return rec
 
     def process_batch(self) -> dict[str, Any]:
         buckets: dict[str, list[Any]] = {
@@ -287,7 +310,7 @@ class RefundService:
             return self._view(return_id)
         if task["kind"] == "external":
             return self._view(return_id)  # 平台纠纷由外部工单驱动
-        rec = self.records.get(row["refund_id"])
+        rec = self.find_record(refund_id=row["refund_id"])
         if action == "approve":
             self.store.resolve_task(return_id, "approve", reviewer, note)
             self.store.transition(return_id, WorkflowStatus.APPROVED, WorkflowStatus.MANUAL_REVIEW)
@@ -330,7 +353,7 @@ class RefundService:
         self.store.update_return(return_id, evidence_json=dumps(list(urls)))
         self.store.resolve_task(return_id, "provided", "user", "补充举证")
         self.store.transition(return_id, WorkflowStatus.RISK_REVIEW, WorkflowStatus.AWAIT_EVIDENCE)
-        rec = self.records.get(row["refund_id"])
+        rec = self.find_record(refund_id=row["refund_id"])
         if rec is None:
             raise KeyError(f"未找到退款单 {row['refund_id']}")
         rec.raw["evidence"] = list(urls)

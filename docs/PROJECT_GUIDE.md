@@ -28,12 +28,12 @@
 
 | 项 | 现状 |
 |---|---|
-| 鉴权 / RBAC / 租户隔离 | 未实现 |
-| 真实支付网关 | 未接；退款工具默认 `SimulatedPaymentGateway` |
-| 真实订单库查询 | 工具目前从内存 records 查；生产需补 repository |
+| 鉴权 / RBAC / 租户隔离 | 已有 `X-API-Key` 基线；RBAC/租户隔离未实现 |
+| 真实支付网关 | 提供 HTTP 适配边界；真实渠道凭证与回调/对账未接 |
+| 真实订单库查询 | 已从 `refund_requests.raw_json` 恢复；上游业务库同步仍需接入 |
 | 多批次退款 | 保持单 `return_id:refund` 幂等语义 |
 | 人工工作台 | 工具返回 `handoff`，没有独立后台 |
-| 多轮会话持久化 | `conversation_id` 为预留字段，未接入主链路 |
+| 多轮会话持久化 | 已接入 Conversation/Message；长程记忆策略未定 |
 | 评测体系 | 只有 pytest 回归，没有完整离线评测平台 |
 
 ---
@@ -56,6 +56,7 @@
 | 数值 | NumPy | `>=2.0.0` |
 | 关系库 | PostgreSQL | compose `postgres:16-alpine` |
 | ORM/异步驱动 | `sqlalchemy[asyncio]` + asyncpg | `>=2.0` / `>=0.30`（含 greenlet） |
+| 迁移 | Alembic | 管理公共 schema；版本 `0001_public_baseline` |
 | 退款同步驱动 | psycopg2-binary | `>=2.9`；工具内同步事务 |
 | 缓存/记忆 | Redis | `>=5.2`；compose `redis:7-alpine` |
 | 对象存储 | MinIO | compose `minio/minio:latest`，Milvus 依赖 |
@@ -64,6 +65,7 @@
 | 日志 | loguru | stderr，支持 `LOG_JSON`；`LOG_LEVEL` 控制 |
 | 追踪 | 自研 Tracer + TraceLog | `trace_id` 返回调用方；Span 持久化到 PostgreSQL |
 | 指标 | prometheus-client | `/api/v1/metrics` |
+| 鉴权 | FastAPI API Key 依赖 | `X-API-Key`；生产开启 |
 | 容器 | Dockerfile + docker-compose | `python:3.12-slim`，单 app 容器 |
 | 测试 | pytest / pytest-asyncio | `>=8.0` / `>=0.24` |
 | 静态检查 | ruff / mypy | `>=0.8` / `>=1.13` |
@@ -292,6 +294,7 @@ python main.py --help                   # 查看全部命令；没有 help/chat 
 python main.py serve                    # 启动服务；等价于 python main.py
 python main.py serve --reload           # 开发热重载
 python main.py init-db                  # 初始化 public schema 应用表
+uv run alembic upgrade head             # 公共 schema 版本化迁移（生产推荐）
 python main.py doctor                   # 检查配置/PostgreSQL/Redis/Milvus
 python main.py doctor --model --llm     # 额外检查嵌入模型和 DeepSeek
 
@@ -580,7 +583,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`117 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率基线约 `61%`。
+当前基线：`128 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `63%`。
 
 测试目录：
 
@@ -680,6 +683,12 @@ docker compose exec -T postgres psql -U postgres -d agent_db \
 | `TRACE_PERSISTENCE_ENABLED` | 是否写 TraceLog | 默认 `true`；高流量可采样后开启 |
 | `AGENT_ORCHESTRATOR_ENABLED` | 是否启用任务类 ReAct | 默认 `true`；退款不走该开关 |
 | `AGENT_MAX_STEPS` | ReAct 最大步数 | 默认 8，防止循环 |
+| `API_AUTH_ENABLED` | 是否要求 `X-API-Key` | 生产必须 `true` |
+| `API_KEY` | 内部 API Key | Secret 管理，不入库不入镜像 |
+| `PAYMENT_GATEWAY_MODE` | `simulated` / `http` | 生产必须 `http` 并接入真实渠道 |
+| `PAYMENT_GATEWAY_URL` | HTTP 支付网关退款接口 | 生产必填 |
+| `PAYMENT_GATEWAY_TOKEN` | HTTP 支付网关 Token | Secret 管理 |
+| `PAYMENT_GATEWAY_TIMEOUT` | 支付网关超时秒数 | 默认 5 |
 | `REFUND_ENABLED` | 是否注册退款工具 | 默认 `false`；灰度时再开 |
 | `REFUND_SEED_DATASET` | 是否 seed 264 条演示数据 | 生产必须 `false` |
 | `LOG_LEVEL` | 日志级别 | `INFO`，排障临时 `DEBUG` |
@@ -687,7 +696,7 @@ docker compose exec -T postgres psql -U postgres -d agent_db \
 | `TRACE_LOG_RETENTION_DAYS` | TraceLog 保留天数 | 默认 30 |
 | `CONVERSATION_LOG_RETENTION_DAYS` | 会话消息保留天数 | 默认 90 |
 
-`docker-compose.yml` 已透传会话持久化、TraceLog、RAG 缓存、检索模式、Orchestrator 与退款开关；新增配置时同步 `.env.example` 和 compose。
+`docker-compose.yml` 已透传鉴权、支付网关、会话持久化、TraceLog、RAG 缓存、检索模式、Orchestrator 与退款开关；新增配置时同步 `.env.example` 和 compose。
 
 ### 8.4 健康检查
 
@@ -699,15 +708,16 @@ docker compose exec -T postgres psql -U postgres -d agent_db \
 
 1. **应用回滚**：保留上一版镜像 tag/digest，`docker compose down` 后用旧镜像启动；不要覆盖旧 tag。
 2. **退款开关**：紧急情况设置 `REFUND_ENABLED=false`，聊天与 RAG 不受影响；已产生的退款台账保留。
-3. **数据库**：迁移只有向前版本（001、002…），没有自动 down；回滚前先备份 PostgreSQL，不要 `DROP SCHEMA refund`。
-4. **配置回滚**：`.env`/Secret 版本化；回滚时同时恢复模型名、开关与数据库 DSN。
-5. **验证**：回滚后跑 `/health/ready`、`python main.py doctor`、`pytest -q`（或对应 smoke）。
+3. **public schema**：使用 `uv run alembic downgrade` 前必须备份数据；生产推荐向前修复。
+4. **refund schema**：迁移只有向前版本（001、002…），没有自动 down；回滚前先备份 PostgreSQL，不要 `DROP SCHEMA refund`。
+5. **配置回滚**：`.env`/Secret 版本化；回滚时同时恢复模型名、开关与数据库 DSN。
+6. **验证**：回滚后跑 `/health/ready`、`python main.py doctor`、`pytest -q`（或对应 smoke）。
 
 ### 8.6 生产未完成项
 
-- 鉴权/RBAC/租户/限流；
-- 真实支付网关与回调、退款对账；
-- 订单/退款单的 DB repository（当前工具依赖内存 records/演示 seed）；
+- RBAC/租户/限流；API Key 只是第一层基线；
+- 真实支付网关与回调、退款对账；HTTP 适配器只是边界，不是已接入渠道；
+- 上游业务订单库同步与更完整的退款单 repository；
 - 人工工作台、SLA、通知；
 - 多租户隔离、审计留存、PII 加密；
 - 观测平台/告警/链路持久化、CI/CD 与压测。

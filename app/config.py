@@ -97,6 +97,33 @@ class Settings(BaseSettings):
     upload_dir: str = Field(default="uploads", description="文档本地存储目录")
     max_upload_mb: int = Field(default=20, description="单文件上传体积上限（MB）")
 
+    # ---- API 鉴权 ----
+    api_auth_enabled: bool = Field(
+        default=False,
+        description="是否要求 X-API-Key；生产环境必须为 true",
+    )
+    api_key: str | None = Field(default=None, description="内部 API Key；不入库不入镜像")
+
+    # ---- 支付网关 ----
+    payment_gateway_mode: str = Field(
+        default="simulated",
+        description="simulated / http；生产必须使用真实网关",
+    )
+    payment_gateway_url: str | None = Field(
+        default=None,
+        description="HTTP 网关退款接口 URL",
+    )
+    payment_gateway_token: str | None = Field(
+        default=None,
+        description="HTTP 网关 Token",
+    )
+    payment_gateway_timeout: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        description="HTTP 网关超时秒数",
+    )
+
     # ---- 会话与追踪持久化 ----
     conversation_persistence_enabled: bool = Field(
         default=True,
