@@ -478,8 +478,9 @@ REFUND_SEED_DATASET=false
 
 ### 5.7 通用 Agent / 会话记忆
 
-- `app/core/agent/`：`AgentOrchestrator`、`PlannerAgent`、`ReActAgent`、`ReflectionAgent`。
+- `app/core/agent/`：仅保留生产使用的 `AgentOrchestrator` 与 `ReActAgent`。
 - `app/api/routes/chat.py`：任务类意图在 `AGENT_ORCHESTRATOR_ENABLED=true` 时进入 ReAct。
+- 未接线的 memory、Planner、Reflection、MultiRetriever 与 Redis 语义缓存已删除，避免概念重复。
 - `app/core/agent/adapters.py`：把 `ToolRegistry`、`ModelRouter`、`Tracer` 适配成通用 Agent 所需端口。
 - `app/infrastructure/database/repositories.py`：`ConversationMemory` 提供只读最近历史；完整一轮问答仍由 `/chat` 统一写入。
 - 退款意图不进入通用 Orchestrator；始终走确定性退款工具。
@@ -583,7 +584,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`128 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `63%`。
+当前基线：`113 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `63%`。
 
 测试目录：
 

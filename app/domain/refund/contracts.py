@@ -131,14 +131,6 @@ class CheckCode(str, Enum):
     REFUND_OVER_PAID = "REFUND_OVER_PAID"
 
 
-class RefundRequestStatus(str, Enum):
-    PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
-    ABNORMAL = "ABNORMAL"
-    SUCCESS = "SUCCESS"
-    CLOSED = "CLOSED"
-
-
 # ── 标签、映射与状态机 ───────────────────────────────────
 ACTION_LABELS = {
     "AUTO_APPROVE_AND_REFUND": "审核通过并发起退款",
@@ -349,18 +341,9 @@ class TierPolicy:
 
 
 @dataclass(frozen=True)
-class RunLimits:
-    max_turns: int = 12
-    max_retries: int = 3
-    lock_ttl_seconds: int = 10
-    checkpoint_retention_days: int = 30
-
-
-@dataclass(frozen=True)
 class AppConfig:
     thresholds: Thresholds = Thresholds()
     tiers: TierPolicy = TierPolicy()
-    limits: RunLimits = RunLimits()
 
 
 CONFIG = AppConfig()
