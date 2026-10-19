@@ -23,7 +23,6 @@ from app.domain.refund.contracts import (
     ActionCode,
     CaseView,
     Dataset,
-    ExecutionResult,
     Record,
     StepOutcome,
     Verdict,
@@ -76,14 +75,12 @@ class RefundService:
             self.store.seed(self.dataset)
         # 客服系统可以动态推送新单据；内存索引与 dataset 保持同步，供查询/恢复使用
         self.records: dict[str, Record] = {r.refund_id: r for r in self.dataset.records}
-        # 每次受理留下可回放的执行结果与实际风控/校验快照，供 trace 检验流程有效性
-        self.executions: dict[str, ExecutionResult] = {}
-        self.outcomes: dict[str, Any] = {}
 
     def close(self) -> None:
         self.store.close()
 
     def register(self, rec: Record) -> None:
+
         """登记客服系统新推来的单据；同一 refund_id 幂等覆盖。"""
         if rec.refund_id not in self.records:
             self.dataset.records.append(rec)
@@ -175,9 +172,7 @@ class RefundService:
             risk_json=dumps({"hits": v.hit_codes, "skipped": v.skipped_rules}),
         )
         # 显式节点表：动作码决定执行节点，节点返回可回放的状态流转/台账结果
-        execution = NODE_MAP[d.action](self.store, rec, d, return_id)
-        self.executions[return_id] = execution
-        self.outcomes[return_id] = outcome
+        NODE_MAP[d.action](self.store, rec, d, return_id)
         reply = reply_of(
             d.action, rec, yuan(d.approved_cents) if d.approved_cents else rec.settled, queue
         )
@@ -204,7 +199,6 @@ class RefundService:
                 rec.refund_id, existing, ActionCode.DEDUPE_RETURN_EXISTING.value
             )
             # 去重没有节点副作用；保留原单执行轨迹即可
-            self.executions.setdefault(existing, ExecutionResult("dedupe", [], 0.0, "", "返回原单"))
             return self._view(
                 existing,
                 rec,

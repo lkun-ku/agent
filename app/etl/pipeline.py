@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from app.etl.chunker import ChunkStrategy, DocumentChunker
+from app.etl.chunker import DocumentChunker
 from app.etl.parser import DocumentParser, ParsedDocument
 
 
@@ -38,13 +38,12 @@ class ETLPipeline:
         filename: str,
         mime_type: str | None,
         *,
-        strategy: ChunkStrategy = ChunkStrategy.RECURSIVE,
         on_chunks: Callable[[list[str], ParsedDocument], Awaitable[None]] | None = None,
     ) -> ETLResult:
         """对上传字节执行解析与分块；可选异步回调处理向量入库等。"""
         try:
             parsed = self._parser.parse_bytes(data, filename, mime_type)
-            chunks = self._chunker.chunk(parsed.text, strategy=strategy)
+            chunks = self._chunker.chunk(parsed.text)
             result = ETLResult(chunks=chunks, parsed=parsed, meta={"chunk_count": len(chunks)})
             if on_chunks is not None:
                 await on_chunks(chunks, parsed)

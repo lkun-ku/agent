@@ -19,7 +19,7 @@ from app.core.rag.store import KnowledgeStore
 from app.infrastructure.embeddings import get_embedder
 from app.infrastructure.llm.adapter import RouterLLM
 from app.infrastructure.llm.factory import get_model_router
-from app.infrastructure.vectordb.milvus_client import MilvusManager
+from app.infrastructure.vectordb.factory import create_milvus_manager
 from app.models.enums import RetrievalMode
 from app.models.schemas import RAGResponse, RetrievalResult
 
@@ -199,20 +199,7 @@ def build_pipeline() -> RAGPipeline:
         raise RuntimeError("未配置 OPENAI_API_KEY，无法启用 RAG")
 
     embedder = get_embedder(settings.embedding_model, settings.embedding_local_only)
-
-    conn_kwargs: dict[str, Any] = {}
-    if settings.milvus_user:
-        conn_kwargs["user"] = settings.milvus_user
-    if settings.milvus_password:
-        conn_kwargs["password"] = settings.milvus_password
-
-    manager = MilvusManager(
-        host=settings.milvus_host,
-        port=str(settings.milvus_port),
-        alias="rag",
-        timeout=settings.milvus_timeout,
-        **conn_kwargs,
-    )
+    manager = create_milvus_manager(settings, alias="rag")
     store = KnowledgeStore(
         manager=manager,
         embedder=embedder,

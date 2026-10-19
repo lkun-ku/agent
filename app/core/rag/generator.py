@@ -133,6 +133,5 @@ class RAGGenerator:
         return RAGResponse(
             answer=answer,
             citations=citations,
-            raw_contexts=list(contexts),
             model=self._model_name,
         )

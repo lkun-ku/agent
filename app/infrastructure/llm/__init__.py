@@ -1,14 +1,17 @@
-"""LLM 子模块：模型路由与熔断器。"""
+"""LLM 相关基础设施。"""
 
-from app.infrastructure.llm.circuit_breaker import CircuitBreaker, CircuitState
-from app.infrastructure.llm.model_router import LLMResponse, ModelConfig, ModelRouter
-from app.infrastructure.llm.types import ModelProvider
+from app.infrastructure.llm.adapter import RouterLLM
+from app.infrastructure.llm.model_router import (
+    LLMResponse,
+    ModelConfig,
+    ModelRouter,
+    build_thinking_extra,
+)
 
 __all__ = [
-    "CircuitBreaker",
-    "CircuitState",
+    "RouterLLM",
     "LLMResponse",
     "ModelConfig",
-    "ModelProvider",
     "ModelRouter",
+    "build_thinking_extra",
 ]

@@ -26,14 +26,6 @@ class MemoryManager(Protocol):
         self, session_id: str, query: str, limit: int = 8
     ) -> list[str]: ...
 
-    async def append_turn(
-        self,
-        session_id: str,
-        role: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None: ...
-
 
 class ToolRegistry(Protocol):
     def list_tool_names(self) -> list[str]: ...
@@ -52,8 +44,6 @@ class Tracer(Protocol):
     ) -> Any: ...
 
     def end_span(self, span: Any, error: BaseException | None = None) -> None: ...
-
-    def log_event(self, trace_id: str, name: str, payload: dict[str, Any]) -> None: ...
 
 
 @dataclass
@@ -116,10 +106,8 @@ class AgentOrchestrator:
         self,
         user_input: str,
         session_id: str,
-        mode: str = "react",
         intent: IntentContext | None = None,
     ) -> OrchestrationResult:
-        _ = mode
         intent_ctx = intent or IntentContext()
         trace_id = self._tracer.new_trace_id()
         span = self._tracer.start_span(
@@ -129,11 +117,6 @@ class AgentOrchestrator:
                 "session_id": session_id,
                 "intent": intent_ctx.intent,
             },
-        )
-        self._tracer.log_event(
-            trace_id,
-            "orchestrator.start",
-            {"user_input_len": len(user_input)},
         )
 
         steps: list[dict[str, Any]] = []
@@ -159,7 +142,6 @@ class AgentOrchestrator:
             return response
         except Exception as exc:  # noqa: BLE001
             logger.exception("编排器未捕获异常")
-            self._tracer.log_event(trace_id, "orchestrator.error", {"error": str(exc)})
             self._tracer.end_span(span, error=exc)
             return OrchestrationResult(
                 answer="",
@@ -183,9 +165,7 @@ class AgentOrchestrator:
         max_steps = int(self._config.get("react_max_steps", 10))
 
         async def trace_cb(record: dict[str, Any]) -> None:
-            payload = {"ts": time.time(), **record}
-            steps.append(payload)
-            self._tracer.log_event(trace_id, "react.step", payload)
+            steps.append({"ts": time.time(), **record})
 
         agent = ReActAgent(
             llm=llm,
@@ -203,13 +183,7 @@ class AgentOrchestrator:
             "trace_callback": trace_cb,
             "extra_system": f"当前识别意图：{intent.intent}，槽位：{intent.slots}",
         }
-        self._tracer.log_event(trace_id, "react.begin", {})
         result = await agent.run(user_input, context)
-        self._tracer.log_event(
-            trace_id,
-            "react.end",
-            {"success": result.success, "steps": len(result.steps)},
-        )
         return result
 
 

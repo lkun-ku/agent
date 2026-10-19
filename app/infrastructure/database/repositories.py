@@ -96,35 +96,6 @@ class ConversationRepository:
             await session.commit()
         return cid
 
-    async def append_message(
-        self,
-        conversation_key: str,
-        role: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        """写入单条消息；会话不存在时自动创建。返回规范后的会话 ID。"""
-        cid = canonical_conversation_id(conversation_key)
-        async with self._sessions() as session:
-            conversation = await session.get(Conversation, cid)
-            if conversation is None:
-                conversation = Conversation(
-                    id=cid,
-                    title=content[:120],
-                    meta={"source": "agent"},
-                )
-                session.add(conversation)
-            session.add(
-                Message(
-                    conversation_id=cid,
-                    role=role,
-                    content=content,
-                    meta=metadata or {},
-                )
-            )
-            await session.commit()
-        return cid
-
     async def get_recent_messages(
         self,
         conversation_key: str,
@@ -144,19 +115,10 @@ class ConversationRepository:
 
 
 class ConversationMemory:
-    """把 ConversationRepository 适配成通用 Agent 的 MemoryLike。
+    """把 ConversationRepository 适配成通用 Agent 的只读 MemoryLike。"""
 
-    默认只读：/chat 统一负责写入一轮完整问答，避免 Orchestrator 重复写回复。
-    """
-
-    def __init__(
-        self,
-        repository: ConversationRepository,
-        *,
-        write_turns: bool = False,
-    ) -> None:
+    def __init__(self, repository: ConversationRepository) -> None:
         self._repository = repository
-        self._write_turns = write_turns
 
     async def get_relevant(
         self,
@@ -167,18 +129,6 @@ class ConversationMemory:
         """通用 Agent 记忆接口；query 当前仅用于日志语义，不做向量召回。"""
         _ = query
         return await self._repository.get_recent_messages(session_id, limit=limit)
-
-    async def append_turn(
-        self,
-        session_id: str,
-        role: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """通用 Agent 写入一条消息；默认由 /chat 统一写入完整轮次。"""
-        if not self._write_turns:
-            return
-        await self._repository.append_message(session_id, role, content, metadata)
 
 
 class TraceRepository:

@@ -206,11 +206,38 @@ class ChatApplicationService:
         """在子 Span 中执行一次异步调用，记录耗时与错误。"""
         span: TraceSpan = self._tracer.start_child_span(trace_id, operation)
         try:
-            return await func()
+            result = await func()
         except Exception as exc:
             self._tracer.end_span(span, error=str(exc))
             raise
         self._tracer.end_span(span, result={"status": "ok"})
+        return result
+
+    def _response(
+        self,
+        *,
+        model: str,
+        content: str,
+        trace_id: str,
+        conversation_id: str,
+        usage: dict[str, Any] | None = None,
+        citations: list[Citation] | None = None,
+        tool: str | None = None,
+        tool_result: RefundToolResult | None = None,
+        cache_hit: bool = False,
+    ) -> ChatResponse:
+        return ChatResponse(
+            id=str(uuid.uuid4()),
+            model=model,
+            content=content,
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            usage=usage,
+            citations=citations,
+            tool=tool,
+            tool_result=tool_result,
+            cache_hit=cache_hit,
+        )
 
     @staticmethod
     def canonical_conversation_id(value: str) -> str:
@@ -250,8 +277,7 @@ class ChatApplicationService:
         conversation_id: str,
         result: RefundToolResult,
     ) -> ChatResponse:
-        return ChatResponse(
-            id=str(uuid.uuid4()),
+        return self._response(
             model="tool:refund",
             content=result.reply,
             trace_id=trace_id,
@@ -370,18 +396,11 @@ class ChatApplicationService:
 
         registry = get_tool_registry()
         allowed_tools = [name for name in registry.list_tool_names() if name != "refund"]
-        config = {
-            "react_max_steps": settings.agent_max_steps,
-            "enable_reflection": False,
-            "fallback_react_on_plan_failure": True,
-        }
+        config = {"react_max_steps": settings.agent_max_steps}
         memory = None
         factory = self._session_factory()
         if settings.conversation_persistence_enabled and factory is not None:
-            memory = ConversationMemory(
-                ConversationRepository(factory),
-                write_turns=False,
-            )
+            memory = ConversationMemory(ConversationRepository(factory))
 
         orchestrator = AgentOrchestrator(
             config,
@@ -393,7 +412,6 @@ class ChatApplicationService:
         agent_result = await orchestrator.run(
             user_text,
             conversation_id,
-            mode="react",
             intent=IntentContext(
                 intent=intent.intent,
                 confidence=intent.confidence,
@@ -404,8 +422,7 @@ class ChatApplicationService:
         if not agent_result.success or not agent_result.answer:
             logger.warning("通用 Agent 执行失败，回退常规链路: {}", agent_result.error)
             return None
-        return ChatResponse(
-            id=str(uuid.uuid4()),
+        return self._response(
             model=f"agent:{agent_result.mode_used}",
             content=agent_result.answer,
             trace_id=trace_id,
@@ -447,17 +464,16 @@ class ChatApplicationService:
         trace_id: str,
         conversation_id: str,
     ) -> ChatResponse:
-        return ChatResponse(
-            id=str(uuid.uuid4()),
+        citations = [
+            Citation.model_validate(item)
+            for item in (cached.get("citations") or [])
+        ]
+        return self._response(
             model=str(cached.get("model") or get_settings().openai_model),
             content=str(cached.get("content") or ""),
             trace_id=trace_id,
             conversation_id=conversation_id,
-            citations=[
-                Citation.model_validate(item)
-                for item in (cached.get("citations") or [])
-            ]
-            or None,
+            citations=citations or None,
             cache_hit=True,
         )
 
@@ -467,8 +483,7 @@ class ChatApplicationService:
         conversation_id: str,
         response: RAGResponse,
     ) -> ChatResponse:
-        return ChatResponse(
-            id=str(uuid.uuid4()),
+        return self._response(
             model=response.model or get_settings().openai_model,
             content=response.answer,
             trace_id=trace_id,
@@ -490,8 +505,7 @@ class ChatApplicationService:
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
-        return ChatResponse(
-            id=str(uuid.uuid4()),
+        return self._response(
             model=response.model_id,
             content=response.content,
             trace_id=trace_id,

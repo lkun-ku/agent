@@ -65,18 +65,9 @@ class LLMCallable(Protocol):
 
 
 class MemoryLike(Protocol):
-    """记忆系统最小接口。"""
+    """只读记忆接口；完整轮次由应用服务统一持久化。"""
 
     async def get_relevant(self, session_id: str, query: str, limit: int = 8) -> list[str]:
-        ...
-
-    async def append_turn(
-        self,
-        session_id: str,
-        role: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
         ...
 
 
@@ -235,16 +226,6 @@ class ReActAgent:
                 steps.append(rec)
                 if trace_cb:
                     await trace_cb(rec)
-                if self._memory is not None:
-                    try:
-                        await self._memory.append_turn(
-                            session_id,
-                            "assistant",
-                            answer,
-                            metadata={"agent": "react", "steps": len(steps)},
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("写入记忆失败: %s", e)
                 return AgentResult(success=True, final_answer=answer, steps=steps)
 
             action = parsed.get("action")

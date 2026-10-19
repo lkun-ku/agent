@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from app.core.tools.registry import ToolRegistry
@@ -62,15 +61,6 @@ class TraceAdapter:
 
     def end_span(self, span: Any, error: BaseException | None = None) -> None:
         self._tracer.end_span(span, error=str(error) if error else None)
-
-    def log_event(
-        self,
-        trace_id: str,
-        name: str,
-        payload: dict[str, Any],
-    ) -> None:
-        """事件暂不落库；TraceLog 当前保存 Span 级结果。"""
-        _ = trace_id, name, json.dumps(payload, ensure_ascii=False)[:1000]
 
 
 __all__ = ["RegistryToolInvoker", "RouterLLMProvider", "TraceAdapter"]

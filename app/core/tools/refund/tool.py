@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
@@ -17,6 +18,10 @@ from app.core.tools.refund.schemas import AgentRequest
 from app.core.tools.refund.service import RefundService
 from app.core.tools.refund.store import PostgresRefundStore
 from app.core.tools.schemas import RefundToolResult, ToolHandoff
+from app.infrastructure.observability.metrics import (
+    ACTIVE_TOOL_INVOCATIONS,
+    TOOL_DURATION,
+)
 
 
 class RefundTool(BaseTool):
@@ -105,6 +110,8 @@ class RefundTool(BaseTool):
             refund_id=refund_id,
             record=record if isinstance(record, dict) else None,
         )
+        started_at = time.perf_counter()
+        ACTIVE_TOOL_INVOCATIONS.inc()
         try:
             response = await asyncio.to_thread(self._get_service().submit, request)
             return RefundToolResult.model_validate(response.to_dict())
@@ -114,6 +121,11 @@ class RefundTool(BaseTool):
         except Exception as exc:  # noqa: BLE001
             logger.exception("退款工具执行失败: {}", exc)
             return self._service_error()
+        finally:
+            ACTIVE_TOOL_INVOCATIONS.dec()
+            TOOL_DURATION.labels(tool=self.name).observe(
+                time.perf_counter() - started_at
+            )
 
     @staticmethod
     def _not_found() -> RefundToolResult:

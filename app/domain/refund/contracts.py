@@ -181,15 +181,6 @@ REASON_LABELS = {
     "seller_out_of_stock": "卖家缺货",
     "other": "其他",
 }
-PLAN_LABELS = {
-    "refund_only": "仅退款",
-    "return_refund": "退货退款",
-    "exchange": "换货",
-    "reship": "补发",
-    "partial_refund": "部分退款/折价",
-    "evidence_required": "补充举证",
-    "reject": "拒绝并给出申诉通道",
-}
 STATUS_LABELS = {
     "risk_review": "风控评估中",
     "approved": "审核通过",
@@ -435,10 +426,6 @@ class Dataset:
     records: list[Record]
     integrity_issues: list[str] = field(default_factory=list)
 
-    def by_refund_id(self, refund_id: str) -> Record | None:
-        return next((r for r in self.records if r.refund_id == refund_id), None)
-
-
 @dataclass
 class Stats:
     """本地历史统计；新客场景基本为空。"""
@@ -612,10 +599,6 @@ def action_label(value: Any) -> str:
 
 def status_label(value: Any) -> str:
     return STATUS_LABELS.get(str(value), str(value or ""))
-
-
-def plan_label(value: Any) -> str:
-    return PLAN_LABELS.get(str(value), str(value or ""))
 
 
 __all__ = [n for n in globals() if not n.startswith("_")]

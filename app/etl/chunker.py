@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Any
 
 import tiktoken
 from loguru import logger
-
-
-class ChunkStrategy(StrEnum):
-    """分块策略枚举。"""
-
-    FIXED = "fixed"
-    RECURSIVE = "recursive"
-    PARAGRAPH = "paragraph"
 
 
 class DocumentChunker:
@@ -40,16 +31,11 @@ class DocumentChunker:
             return len(text)
         return len(self._encoding.encode(text))
 
-    def chunk(self, text: str, strategy: ChunkStrategy = ChunkStrategy.RECURSIVE) -> list[str]:
-        """按策略将全文切分为块列表。"""
+    def chunk(self, text: str) -> list[str]:
+        """按生产默认的递归策略切分全文。"""
         text = text.strip()
         if not text:
             return []
-
-        if strategy == ChunkStrategy.FIXED:
-            return self._chunk_fixed(text)
-        if strategy == ChunkStrategy.PARAGRAPH:
-            return self._chunk_paragraph(text)
         return self._chunk_recursive(text, _depth=0)
 
     def _chunk_fixed(self, text: str) -> list[str]:

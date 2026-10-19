@@ -584,7 +584,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`113 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `63%`。
+当前基线：`114 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `63%`。
 
 测试目录：
 

@@ -14,6 +14,7 @@ from app.core.tools.refund.payment import (
     create_payment_gateway,
 )
 from app.core.tools.refund.service import RefundService
+from app.core.tools.refund.tool import RefundTool
 from app.domain.refund.activities.ingest import load_dataset
 from app.infrastructure.security.auth import require_api_key
 
@@ -130,6 +131,37 @@ def test_http_payment_gateway_wraps_transport_error(
     )
     with pytest.raises(RuntimeError, match="支付网关退款失败"):
         gateway.refund("R0001", Decimal("1.00"))
+
+
+def test_refund_tool_emits_duration_metric() -> None:
+    from app.infrastructure.observability.metrics import (
+        ACTIVE_TOOL_INVOCATIONS,
+        TOOL_DURATION,
+    )
+
+    class FakeResponse:
+        def to_dict(self) -> dict[str, str]:
+            return {
+                "status": "completed",
+                "action": "AUTO_APPROVE_AND_REFUND",
+                "reply": "ok",
+            }
+
+    class FakeAgentService:
+        def submit(self, request: object) -> FakeResponse:
+            return FakeResponse()
+
+    tool = RefundTool(service_factory=FakeAgentService)  # type: ignore[arg-type,return-value]
+    before = TOOL_DURATION.labels(tool="refund")._sum.get()
+    active_before = ACTIVE_TOOL_INVOCATIONS._value.get()
+
+    import asyncio
+
+    result = asyncio.run(tool.execute(order_id="ORDER-METRIC"))
+
+    assert result.status == "completed"
+    assert ACTIVE_TOOL_INVOCATIONS._value.get() == active_before
+    assert TOOL_DURATION.labels(tool="refund")._sum.get() > before
 
 
 def test_refund_record_can_be_restored_from_store(tmp_path: Path) -> None:

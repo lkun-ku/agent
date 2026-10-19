@@ -316,19 +316,9 @@ async def _needs_backfill(
         return []
 
     settings = get_settings()
-    from app.infrastructure.vectordb.milvus_client import MilvusManager
+    from app.infrastructure.vectordb.factory import create_milvus_manager
 
-    conn: dict[str, Any] = {}
-    if settings.milvus_user:
-        conn["user"] = settings.milvus_user
-    if settings.milvus_password:
-        conn["password"] = settings.milvus_password
-    manager = MilvusManager(
-        host=settings.milvus_host,
-        port=str(settings.milvus_port),
-        alias="ingest_backfill",
-        **conn,
-    )
+    manager = create_milvus_manager(settings, alias="ingest_backfill")
     try:
         count = await manager.collection_count(settings.rag_collection_name)
     except Exception as exc:  # noqa: BLE001
@@ -346,12 +336,6 @@ async def _needs_backfill(
         if total > indexed:
             backfill.append(rel)
     return sorted(backfill)
-
-
-def _ingest_pipeline() -> Any:
-    from app.etl import ETLPipeline
-
-    return ETLPipeline()
 
 
 async def _get_pipeline_for_sync() -> Any:

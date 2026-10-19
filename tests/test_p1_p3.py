@@ -149,11 +149,10 @@ async def test_trace_repository_maps_span_duration_and_result() -> None:
     assert row.payload == {"mode": "rag"}
 
 
-def test_conversation_memory_can_be_read_only() -> None:
+def test_conversation_memory_is_read_only() -> None:
     class FakeRepository:
         def __init__(self) -> None:
             self.reads: list[int] = []
-            self.writes: list[tuple[str, str]] = []
 
         async def get_recent_messages(
             self,
@@ -163,27 +162,15 @@ def test_conversation_memory_can_be_read_only() -> None:
             self.reads.append(limit)
             return ["历史消息"]
 
-        async def append_message(
-            self,
-            conversation_key: str,
-            role: str,
-            content: str,
-            metadata: dict[str, Any] | None = None,
-        ) -> str:
-            self.writes.append((role, content))
-            return conversation_key
-
     repository = FakeRepository()
-    read_only = ConversationMemory(repository)  # type: ignore[arg-type]
+    memory = ConversationMemory(repository)  # type: ignore[arg-type]
 
     import asyncio
 
-    messages = asyncio.run(read_only.get_relevant("conversation-1", "q", limit=3))
-    asyncio.run(read_only.append_turn("conversation-1", "assistant", "答案"))
+    messages = asyncio.run(memory.get_relevant("conversation-1", "q", limit=3))
 
     assert messages == ["历史消息"]
     assert repository.reads == [3]
-    assert repository.writes == []
 
 
 @pytest.mark.asyncio

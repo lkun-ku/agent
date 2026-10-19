@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from loguru import logger
 
@@ -22,20 +21,6 @@ class DocumentParser:
 
     def __init__(self, max_chars: int = 500_000) -> None:
         self._max_chars = max_chars
-
-    def parse_file(self, path: Path, mime_type: str | None = None) -> ParsedDocument:
-        """从文件路径解析。"""
-        mime = mime_type or "application/octet-stream"
-        suffix = path.suffix.lower()
-        if suffix == ".txt" or mime.startswith("text/"):
-            raw = path.read_text(encoding="utf-8", errors="ignore")
-            return ParsedDocument(text=raw[: self._max_chars], mime_type=mime, meta={})
-
-        if suffix == ".pdf" or mime == "application/pdf":
-            return self._parse_pdf(path.read_bytes(), mime)
-
-        logger.warning("未知类型，按二进制忽略解析 path={}", path)
-        return ParsedDocument(text="", mime_type=mime, meta={"warning": "unsupported"})
 
     def parse_bytes(self, data: bytes, filename: str, mime_type: str | None) -> ParsedDocument:
         """从内存字节解析。"""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -12,7 +12,6 @@ from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
 
 from app.infrastructure.llm.circuit_breaker import CircuitBreaker
-from app.infrastructure.llm.types import ModelProvider
 
 
 class LLMResponse(BaseModel):
@@ -21,7 +20,6 @@ class LLMResponse(BaseModel):
     content: str = ""
     model_id: str = ""
     usage: dict[str, Any] | None = None
-    raw: dict[str, Any] | None = None
 
 
 def build_thinking_extra(enabled: bool) -> dict[str, Any]:
@@ -40,11 +38,9 @@ class ModelConfig:
     model_id: str
     api_key: str
     base_url: str | None = None
-    provider: ModelProvider = ModelProvider.OPENAI
     priority: int = 0
     weight: float = 1.0
     thinking: bool | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class ModelRouter:
@@ -220,5 +216,4 @@ class ModelRouter:
             content=content,
             model_id=model_id,
             usage=usage,
-            raw=resp.model_dump() if hasattr(resp, "model_dump") else None,
         )

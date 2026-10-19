@@ -14,8 +14,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.infrastructure.cache.factory import get_redis_cache
 from app.infrastructure.database.session import get_async_session
+from app.infrastructure.health.probes import probe_milvus, probe_redis
 from app.infrastructure.observability.metrics import DEPENDENCY_ERRORS
 
 router = APIRouter(tags=["health"])
@@ -108,26 +108,8 @@ async def _check_dependency(
 
 
 async def _check_redis() -> None:
-    cache = get_redis_cache()
-    if not await cache.ping():
-        raise RuntimeError("Redis ping 返回 False")
+    await probe_redis(get_settings())
 
 
 async def _check_milvus() -> None:
-    from app.infrastructure.vectordb.milvus_client import MilvusManager
-
-    settings = get_settings()
-    conn: dict[str, Any] = {}
-    if settings.milvus_user:
-        conn["user"] = settings.milvus_user
-    if settings.milvus_password:
-        conn["password"] = settings.milvus_password
-    manager = MilvusManager(
-        host=settings.milvus_host,
-        port=str(settings.milvus_port),
-        alias="health",
-        timeout=settings.milvus_timeout,
-        **conn,
-    )
-    if not await manager.collection_exists(settings.rag_collection_name):
-        raise RuntimeError("Milvus 集合不存在")
+    await probe_milvus(get_settings())

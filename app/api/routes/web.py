@@ -527,11 +527,9 @@ async def chat_ui() -> HTMLResponse:
     return HTMLResponse(_CHAT_HTML, headers=_NO_STORE)
 
 
-def _render_doc_list() -> str:
+def _render_doc_list(app: Any) -> str:
     """服务端渲染接口列表，避免依赖前端脚本拉取 OpenAPI。"""
     from html import escape
-
-    from app.main import app  # 延迟导入，避免模块级循环引用
 
     spec = app.openapi()
     groups: dict[str, list[str]] = {}
@@ -552,23 +550,31 @@ def _render_doc_list() -> str:
     return "".join(parts)
 
 
+def _docs_response(app: Any) -> HTMLResponse:
+    """渲染离线 API 文档。"""
+    return HTMLResponse(
+        _DOCS_HTML.replace("__SERVER_LIST__", _render_doc_list(app)),
+        headers=_NO_STORE,
+    )
+
+
 @router.get("/docs", response_class=HTMLResponse)
-async def offline_docs() -> HTMLResponse:
+async def offline_docs(request: Request) -> HTMLResponse:
     """离线 API 文档：服务端渲染接口列表，不依赖任何 CDN。"""
-    return HTMLResponse(_DOCS_HTML.replace("__SERVER_LIST__", _render_doc_list()), headers=_NO_STORE)
+    return _docs_response(request.app)
 
 
 @router.get("/redoc", response_class=HTMLResponse)
-async def offline_redoc() -> HTMLResponse:
+async def offline_redoc(request: Request) -> HTMLResponse:
     """ReDoc 依赖 CDN，离线环境下返回自包含文档页。"""
-    return HTMLResponse(_DOCS_HTML.replace("__SERVER_LIST__", _render_doc_list()), headers=_NO_STORE)
+    return _docs_response(request.app)
 
 
 @router.get("/swagger", response_class=HTMLResponse)
 @router.get("/api-docs", response_class=HTMLResponse)
-async def docs_alias() -> HTMLResponse:
+async def docs_alias(request: Request) -> HTMLResponse:
     """/swagger、/api-docs 别名，等同 /docs（避免旧书签或习惯路径 404）。"""
-    return HTMLResponse(_DOCS_HTML.replace("__SERVER_LIST__", _render_doc_list()), headers=_NO_STORE)
+    return _docs_response(request.app)
 
 
 @router.get("/diag", response_class=HTMLResponse)

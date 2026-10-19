@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -29,11 +30,23 @@ class DocumentIndexingResult:
     chunk_count: int
 
 
+@lru_cache(maxsize=1)
+def get_etl_pipeline() -> ETLPipeline:
+    """进程级复用解析器与分块器，避免批量同步重复初始化 tiktoken。"""
+    return ETLPipeline()
+
+
 class DocumentIndexingService:
     """统一文档入库服务；一个实例绑定一个已构建的 RAG Pipeline。"""
 
-    def __init__(self, pipeline: Any | None) -> None:
+    def __init__(
+        self,
+        pipeline: Any | None,
+        *,
+        etl_pipeline: ETLPipeline | None = None,
+    ) -> None:
         self._pipeline = pipeline
+        self._etl_pipeline = etl_pipeline or get_etl_pipeline()
 
     async def index_bytes(
         self,
@@ -53,8 +66,7 @@ class DocumentIndexingService:
         - 向量库失败不抛出，结果中 ``indexed=0``；
         - 数据库提交失败时回滚并清理已写向量。
         """
-        etl_pipeline = ETLPipeline()
-        etl = await etl_pipeline.run_bytes(
+        etl = await self._etl_pipeline.run_bytes(
             content,
             filename=etl_filename or filename,
             mime_type=mime_type,
@@ -141,4 +153,8 @@ class DocumentIndexingService:
         )
 
 
-__all__ = ["DocumentIndexingResult", "DocumentIndexingService"]
+__all__ = [
+    "DocumentIndexingResult",
+    "DocumentIndexingService",
+    "get_etl_pipeline",
+]
