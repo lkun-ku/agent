@@ -474,7 +474,8 @@ REFUND_SEED_DATASET=false
 | `app/etl/` | TXT/PDF 解析、tiktoken 分块、流水线 |
 | `app/api/routes/document.py` | 上传、列表、知识库同步；类型/体积/空文件校验 |
 | `app/api/routes/health.py` | 存活/就绪探针 |
-| `app/api/routes/web.py` | 服务端 HTML 页面与离线文档 |
+| `app/api/routes/web.py` | 服务端 HTML 页面与离线文档路由 |
+| `app/static/` | 内置页面 HTML/CSS/JS 资源 |
 
 ### 5.7 通用 Agent / 会话记忆
 
@@ -584,7 +585,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`114 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `63%`。
+当前基线：`114 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `65%`。
 
 测试目录：
 

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>企业级 AI Agent 服务</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  line-height:1.6}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:880px;margin:0 auto;padding:40px 24px 64px}
+h1{font-size:26px;margin:0 0 6px}
+.sub{color:#8b949e;margin:0 0 28px;font-size:14px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 10px;color:#e6edf3;font-weight:600}
+.muted{color:#8b949e;font-size:13px}
+code{background:#0d1117;border:1px solid #30363d;border-radius:5px;
+  padding:1px 6px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #21262d;vertical-align:top}
+th{color:#8b949e;font-weight:500}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+  border:1px solid #30363d;border-radius:999px;padding:3px 10px;color:#8b949e}
+.dot{width:7px;height:7px;border-radius:50%;background:#8b949e}
+.dot.ok{background:#3fb950}
+.dot.bad{background:#f85149}
+.links{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.link{display:block;background:#0d1117;border:1px solid #30363d;border-radius:10px;
+  padding:12px 14px}
+.link b{display:block;font-size:14px;margin-bottom:2px}
+.link span{color:#8b949e;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>企业级 AI Agent 服务</h1>
+  <p class="sub">FastAPI + DeepSeek（OpenAI 兼容协议）· 服务已启动</p>
+
+  <div class="card">
+    <h2>运行状态</h2>
+    <span class="badge"><span class="dot" id="dot"></span><span id="status">检测中…</span></span>
+    <p class="muted" id="env"></p>
+  </div>
+
+  <div class="card">
+    <h2>快速入口</h2>
+    <div class="links">
+      <a class="link" href="/ui"><b>聊天演示页</b><span>浏览器里直接对话，验证模型连通</span></a>
+      <a class="link" href="/docs"><b>Swagger UI</b><span>交互式 API 文档与调试</span></a>
+      <a class="link" href="/redoc"><b>ReDoc</b><span>只读接口文档</span></a>
+      <a class="link" href="/api/v1/health"><b>健康检查</b><span>GET /api/v1/health</span></a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>接口一览</h2>
+    <table>
+      <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+      <tr><td>GET</td><td><code>/api/v1/health</code></td><td>存活探针，不依赖中间件</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/health/ready</code></td><td>就绪探针，检查 PostgreSQL（不可用返回 503）</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/chat</code></td><td>非流式对话（意图识别 + 模型路由 + 熔断）</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/chat/stream</code></td><td>SSE 流式对话</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/documents/upload</code></td><td>上传 TXT/PDF，ETL 分块后入库（需 PostgreSQL）</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/documents</code></td><td>文档列表（需 PostgreSQL）</td></tr>
+    </table>
+  </div>
+
+  <p class="muted">提示：浏览器请访问 <code>http://127.0.0.1:8000</code>，<code>0.0.0.0</code> 只是监听地址，不能直接打开。</p>
+</div>
+<script>
+fetch('/api/v1/health').then(r => r.json()).then(d => {
+  document.getElementById('status').textContent = '服务正常 · ' + d.status;
+  document.getElementById('dot').className = 'dot ok';
+}).catch(() => {
+  document.getElementById('status').textContent = '服务不可用';
+  document.getElementById('dot').className = 'dot bad';
+});
+fetch('/api/v1/health/ready').then(async r => {
+  const d = await r.json();
+  document.getElementById('env').textContent =
+    '环境：' + d.app_env + ' · 数据库：' + (d.database === 'up' ? '已连接' : '未连接');
+}).catch(() => {});
+</script>
+</body>
+</html>

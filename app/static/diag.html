@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>连通性诊断 · 企业级 AI Agent</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  line-height:1.6}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:880px;margin:0 auto;padding:40px 24px 64px}
+h1{font-size:26px;margin:0 0 6px}
+.sub{color:#8b949e;margin:0 0 28px;font-size:14px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 10px;color:#e6edf3;font-weight:600}
+.muted{color:#8b949e;font-size:13px}
+code{background:#0d1117;border:1px solid #30363d;border-radius:5px;
+  padding:1px 6px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace}
+pre{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;overflow:auto;font-size:12.5px}
+li{margin:4px 0;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:760px">
+  <h1>连通性诊断</h1>
+  <p class="sub">用于定位「首次打不开 / 页面空白」是服务端、代理还是缓存问题</p>
+
+  <div class="card">
+    <h2>服务端看到的请求</h2>
+    <pre id="info">__INFO__</pre>
+  </div>
+
+  <div class="card">
+    <h2>浏览器端探测</h2>
+    <ul id="probe"><li>正在检测…</li></ul>
+  </div>
+
+  <div class="card">
+    <h2>常见原因与处理</h2>
+    <p class="muted">
+      1) 首次打不开、返回后再进就行 —— 通常是系统代理 / VPN 拦截了 127.0.0.1：
+      在浏览器「代理例外」中加入 <code>127.0.0.1</code> 与 <code>localhost</code>，或临时关闭代理。<br>
+      2) 页面空白且像是旧版 Swagger —— 浏览器缓存了旧页面，按 <code>Ctrl+Shift+R</code> 强刷；
+      服务端已对所有页面下发 <code>Cache-Control: no-store</code>。<br>
+      3) 用地址 <code>http://127.0.0.1:8000</code>，不要用 <code>0.0.0.0</code>。
+    </p>
+  </div>
+</div>
+<script>
+const probeEl = document.getElementById('probe');
+probeEl.innerHTML = '';
+
+function add(text) {
+  const li = document.createElement('li');
+  li.textContent = text;
+  probeEl.appendChild(li);
+}
+
+async function test(url) {
+  const t0 = performance.now();
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    const text = await r.text();
+    add(url + ' -> HTTP ' + r.status + ' / ' + text.length + ' bytes / '
+        + Math.round(performance.now() - t0) + 'ms');
+  } catch (e) {
+    add(url + ' -> 失败: ' + e.message);
+  }
+}
+
+add('当前地址: ' + location.href);
+add('浏览器在线状态: ' + (navigator.onLine ? '在线' : '离线'));
+(async () => {
+  await test('/api/v1/health');
+  await test('/api/v1/health/ready');
+  await test('/openapi.json');
+  await test('/docs');
+})();
+</script>
+</body>
+</html>

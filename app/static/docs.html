@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API 文档 · 企业级 AI Agent</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  line-height:1.6}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:880px;margin:0 auto;padding:40px 24px 64px}
+h1{font-size:26px;margin:0 0 6px}
+.sub{color:#8b949e;margin:0 0 28px;font-size:14px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:18px 20px;margin-bottom:16px}
+.muted{color:#8b949e;font-size:13px}
+code{background:#0d1117;border:1px solid #30363d;border-radius:5px;
+  padding:1px 6px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace}
+.layout{display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start}
+@media(max-width:820px){.layout{grid-template-columns:1fr}}
+.ep{display:flex;gap:8px;align-items:baseline;padding:7px 8px;border-radius:7px;cursor:pointer;
+  font-size:13px;border:1px solid transparent}
+.ep:hover{background:#0d1117;border-color:#30363d}
+.ep.active{background:#0d1117;border-color:#1f6feb}
+.ep .p{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;word-break:break-all}
+.m{font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:1px 6px;border-radius:4px;color:#fff}
+.m.get{background:#1f6feb}.m.post{background:#238636}.m.put{background:#9e6a03}.m.delete{background:#da3633}
+.tag{font-size:11.5px;color:#8b949e;margin:14px 0 4px;text-transform:uppercase;letter-spacing:.6px}
+.row{display:flex;gap:8px;margin:8px 0}
+.row label{min-width:88px;font-size:12.5px;color:#8b949e;padding-top:6px}
+.row input,.row textarea{flex:1;background:#0d1117;color:#e6edf3;border:1px solid #30363d;
+  border-radius:8px;padding:7px 10px;font:inherit;font-size:13px}
+.row textarea{min-height:130px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+pre{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;overflow:auto;
+  font-size:12.5px;max-height:340px}
+.hint{font-size:12.5px;color:#8b949e;margin:4px 0 12px}
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:1080px">
+  <h1>API 文档</h1>
+  <p class="sub">由 <code>/openapi.json</code> 本地渲染，不依赖任何 CDN，可直接在线调试</p>
+  <div class="layout">
+    <div class="card" id="list">__SERVER_LIST__</div>
+    <div class="card" id="detail"><span class="muted">从左侧选择一个接口</span></div>
+  </div>
+</div>
+<script>
+const listEl = document.getElementById('list');
+const detailEl = document.getElementById('detail');
+let spec = null;
+let current = null;
+
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"]/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]
+  ));
+}
+function resolveRef(node) {
+  if (!node || !node.$ref) return node;
+  let cur = spec;
+  for (const part of node.$ref.replace('#/','').split('/')) cur = cur[part];
+  return cur;
+}
+function sample(schema, depth) {
+  depth = depth || 0;
+  if (!schema || depth > 6) return null;
+  schema = resolveRef(schema);
+  if (schema.allOf) return Object.assign({}, ...schema.allOf.map(s => sample(s, depth+1)));
+  const t = schema.type;
+  if (t === 'object' || schema.properties) {
+    const out = {};
+    for (const [k, v] of Object.entries(schema.properties || {})) out[k] = sample(v, depth+1);
+    return out;
+  }
+  if (t === 'array') return [sample(schema.items || {}, depth+1)];
+  if (t === 'integer' || t === 'number') return schema.default != null ? schema.default : 0;
+  if (t === 'boolean') return schema.default != null ? schema.default : false;
+  if (schema.enum) return schema.enum[0];
+  return schema.default != null ? schema.default : '';
+}
+
+// 接口列表由服务端渲染，即使 JS 失效也能看到全部接口；
+// JS 只负责绑定调试交互，失败时不影响文档阅读。
+fetch('/openapi.json').then(r => r.json()).then(s => { spec = s; bindRows(); })
+  .catch(() => {});
+
+function bindRows() {
+  document.querySelectorAll('.ep').forEach(row => {
+    row.onclick = () => {
+      document.querySelectorAll('.ep').forEach(e => e.classList.remove('active'));
+      row.classList.add('active');
+      const path = row.dataset.path;
+      const method = row.dataset.method;
+      showDetail({ path, method, op: spec.paths[path][method] });
+    };
+  });
+}
+
+function showDetail(ep) {
+  current = ep;
+  const op = ep.op;
+  const params = (op.parameters || []).filter(p => p.in === 'path' || p.in === 'query');
+  const bodySchema = op.requestBody && op.requestBody.content
+    && (op.requestBody.content['application/json'] || {}).schema;
+  let html = '<h2>' + esc(op.summary || ep.path) + '</h2>'
+    + '<p class="hint"><span class="m ' + ep.method + '">' + ep.method.toUpperCase() + '</span> '
+    + '<code>' + esc(ep.path) + '</code></p>';
+  for (const p of params) {
+    html += '<div class="row"><label>' + esc(p.name) + (p.required ? ' *' : '') + '</label>'
+      + '<input id="param-' + esc(p.name) + '" placeholder="' + esc(p.in) + ' 参数" value=""></div>';
+  }
+  if (bodySchema) {
+    html += '<div class="row"><label>请求体</label><textarea id="body">'
+      + esc(JSON.stringify(sample(bodySchema), null, 2)) + '</textarea></div>';
+  }
+  html += '<div class="row"><label></label><button id="send" style="padding:8px 18px">发送请求</button></div>'
+    + '<pre id="resp" style="display:none"></pre>';
+  detailEl.innerHTML = html;
+
+  const btn = document.getElementById('send');
+  btn.onclick = send;
+}
+
+async function send() {
+  const op = current.op;
+  let path = current.path;
+  for (const p of (op.parameters || [])) {
+    if (p.in !== 'path') continue;
+    const el = document.getElementById('param-' + p.name);
+    path = path.replace('{' + p.name + '}', encodeURIComponent(el ? el.value : ''));
+  }
+  const query = new URLSearchParams();
+  for (const p of (op.parameters || [])) {
+    if (p.in !== 'query') continue;
+    const el = document.getElementById('param-' + p.name);
+    if (el && el.value) query.set(p.name, el.value);
+  }
+  const url = path + (query.toString() ? '?' + query.toString() : '');
+  const opts = { method: current.method.toUpperCase(), headers: {} };
+  const bodyEl = document.getElementById('body');
+  if (bodyEl && bodyEl.value.trim()) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = bodyEl.value;
+  }
+  const respEl = document.getElementById('resp');
+  respEl.style.display = 'block';
+  respEl.textContent = '请求中…';
+  try {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    let pretty = text;
+    try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+    respEl.textContent = 'HTTP ' + r.status + '\n\n' + pretty;
+  } catch (err) {
+    respEl.textContent = '请求失败：' + err.message;
+  }
+}
+</script>
+</body>
+</html>
