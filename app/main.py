@@ -15,7 +15,6 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import time
-import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -43,6 +42,7 @@ from app.infrastructure.observability.metrics import (
     HTTP_REQUESTS,
 )
 from app.infrastructure.security.auth import require_api_key
+from app.shared.hashing import uuid4_str
 
 
 def _configure_logging(level: str, *, json_logs: bool = False) -> None:
@@ -175,7 +175,7 @@ def create_app() -> FastAPI:
         if path == f"{settings.api_prefix}/metrics":
             return await call_next(request)
 
-        trace_id = request.headers.get("x-trace-id") or str(uuid.uuid4())
+        trace_id = request.headers.get("x-trace-id") or uuid4_str()
         conversation_id = request.headers.get("x-conversation-id")
         tokens = set_trace_context(trace_id, conversation_id)
         started_at = time.perf_counter()

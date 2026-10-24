@@ -461,23 +461,39 @@ REFUND_SEED_DATASET=false
 - 纯逻辑，不依赖 FastAPI/DB/LLM。
 - 当前退款流程：受理 → 准入 → 风控 → 动作 → 状态/台账/人工任务；真实资金执行仍为模拟。
 
-### 5.6 RAG 与文档
+### 5.6 共享工具集
+
+- 目录：`app/shared/`
+- 约束：只允许纯函数、常量与轻量类型；禁止 FastAPI/SQLAlchemy/Redis/Milvus/OpenAI 依赖。
+- 已提供：
+  - `jsonx.py`：JSON 序列化与容错解析；
+  - `hashing.py`：SHA-256、UUIDv4、UUIDv5；
+  - `times.py`：UTC 时间、保留期截止点、诊断时间；
+  - `files.py`：上传文件名清理与类型白名单；
+  - `http.py`：SSE 帧编码。
+- 详细清单见 `app/shared/README.md`。
+
+### 5.7 RAG 与文档
 
 | 文件 | 职责 |
 |---|---|
 | `app/core/rag/pipeline.py` | `RAGPipeline`：索引/检索/生成；`get_pipeline()` 进程单例 |
+| `app/core/rag/ports.py` | `DocumentIndexingService` 与知识同步的最小 Pipeline 端口 |
 | `app/core/rag/ingest.py` | `knowledge/` 增量同步、sha256 变更检测、回填/清理 |
 | `app/core/rag/store.py` | Milvus 分块读写、先删后插、检索 |
-| `app/core/rag/retriever.py` | 向量/BM25/混合 RRF（可选） |
+| `app/core/rag/search.py` | 中文 BM25 与 RRF 检索内核 |
+| `app/core/rag/indexing.py` | 上传与同步共用的 ETL → DB → 向量库生命周期 |
 | `app/core/rag/reranker.py` | CrossEncoder 重排（可选） |
 | `app/core/rag/generator.py` | 上下文拼装、引用解析、`RAGResponse` |
-| `app/etl/` | TXT/PDF 解析、tiktoken 分块、流水线 |
+| `app/etl/` | TXT/PDF 解析、tiktoken 递归分块、流水线 |
 | `app/api/routes/document.py` | 上传、列表、知识库同步；类型/体积/空文件校验 |
 | `app/api/routes/health.py` | 存活/就绪探针 |
 | `app/api/routes/web.py` | 服务端 HTML 页面与离线文档路由 |
 | `app/static/` | 内置页面 HTML/CSS/JS 资源 |
 
-### 5.7 通用 Agent / 会话记忆
+### 5.8 通用 Agent / 会话记忆
+
+### 5.8 通用 Agent / 会话记忆
 
 - `app/core/agent/`：仅保留生产使用的 `AgentOrchestrator` 与 `ReActAgent`。
 - `app/api/routes/chat.py`：任务类意图在 `AGENT_ORCHESTRATOR_ENABLED=true` 时进入 ReAct。
@@ -486,7 +502,7 @@ REFUND_SEED_DATASET=false
 - `app/infrastructure/database/repositories.py`：`ConversationMemory` 提供只读最近历史；完整一轮问答仍由 `/chat` 统一写入。
 - 退款意图不进入通用 Orchestrator；始终走确定性退款工具。
 
-### 5.8 基础设施
+### 5.9 基础设施
 
 - `app/infrastructure/llm/model_router.py`：优先级/权重路由、熔断、降级、thinking 参数。
 - `app/infrastructure/llm/circuit_breaker.py`：closed/open/half-open。
@@ -585,7 +601,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`114 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `65%`。
+当前基线：`143 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `66%`。
 
 测试目录：
 

@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
+
+from app.shared.times import seconds_iso_now
 
 router = APIRouter(tags=["web"], include_in_schema=False)
 
@@ -100,7 +101,7 @@ async def diagnostics(request: Request) -> HTMLResponse:
         "host_header": request.headers.get("host", ""),
         "user_agent": request.headers.get("user-agent", ""),
         "x_forwarded_for": request.headers.get("x-forwarded-for", ""),
-        "server_time": datetime.now().isoformat(timespec="seconds"),
+        "server_time": seconds_iso_now(),
     }
     body = _html("diag.html").replace(
         "__INFO__", json.dumps(info, ensure_ascii=False, indent=2)

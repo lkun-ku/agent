@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import delete, select
@@ -12,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.infrastructure.database.models import Conversation, Message, TraceLog
 from app.infrastructure.trace.tracer import TraceRecord
+from app.shared.hashing import deterministic_uuid
+from app.shared.times import retention_cutoff, utc_now
 
 _CONVERSATION_NAMESPACE = uuid.UUID("4f8c3af8-9c58-4c8b-8840-4f68f7f54c9c")
 _SENSITIVE_KEYS = {
@@ -47,7 +48,10 @@ def canonical_conversation_id(value: str) -> str:
     try:
         return str(uuid.UUID(value))
     except ValueError:
-        return str(uuid.uuid5(_CONVERSATION_NAMESPACE, f"conversation:{value}"))
+        return deterministic_uuid(
+            _CONVERSATION_NAMESPACE,
+            f"conversation:{value}",
+        )
 
 
 class ConversationRepository:
@@ -166,7 +170,7 @@ class TraceRepository:
 
     async def prune_before(self, retention_days: int) -> int:
         """删除保留期之前的 TraceLog，返回删除行数。"""
-        cutoff = datetime.now(UTC) - timedelta(days=max(1, retention_days))
+        cutoff = retention_cutoff(retention_days)
         async with self._sessions() as session:
             result = await session.execute(
                 delete(TraceLog).where(TraceLog.created_at < cutoff)
@@ -189,9 +193,7 @@ class ObservabilityRetentionService:
         conversation_retention_days: int,
     ) -> dict[str, int]:
         trace_deleted = await self._trace_repository.prune_before(trace_retention_days)
-        message_cutoff = datetime.now(UTC) - timedelta(
-            days=max(1, conversation_retention_days)
-        )
+        message_cutoff = retention_cutoff(conversation_retention_days)
         async with self._sessions() as session:
             message_result = await session.execute(
                 delete(Message).where(Message.created_at < message_cutoff)
@@ -205,7 +207,7 @@ class ObservabilityRetentionService:
 
 def utc_now_iso() -> str:
     """供仓储测试与日志使用的稳定 UTC 时间格式。"""
-    return datetime.now(UTC).isoformat()
+    return utc_now().isoformat()
 
 
 __all__ = [

@@ -5,13 +5,11 @@
 
 from __future__ import annotations
 
-import importlib
-import json
-from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from types import ModuleType
 from typing import Any, Protocol
+
+from app.shared.jsonx import dumps_json, loads_json
 
 
 def normalize(value: datetime) -> datetime:
@@ -57,51 +55,21 @@ def paid_cents(goods: int, freight: int, tax: int, discount: int) -> int:
 
 
 def loads(raw: Any, default: Any = None) -> Any:
+    """容错 JSON 解析；保持业务层原有空值/坏值返回默认值语义。"""
     try:
-        return json.loads(raw) if raw else (default if default is not None else {})
+        return loads_json(raw, default if default is not None else {})
     except (TypeError, ValueError):
         return default if default is not None else {}
 
 
 def dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
-
-
-def lazy_module(name: str) -> ModuleType:
-    """按需导入，避免包门面连坐加载重依赖。"""
-    return importlib.import_module(name)
-
-
-def import_string(path: str) -> Any:
-    """支持 'a.b:attr' 与 'a.b.attr' 两种写法。"""
-    if ":" in path:
-        module, attr = path.split(":", 1)
-    else:
-        module, _, attr = path.rpartition(".")
-    return getattr(importlib.import_module(module), attr)
-
-
-def lazy_exports(mapping: dict[str, str]) -> Callable[[str], Any]:
-    """PEP 562 懒加载门面；mapping: 导出名 -> 'module:attr'。"""
-
-    def __getattr__(name: str) -> Any:
-        if name not in mapping:
-            raise AttributeError(name)
-        mod, _, attr = mapping[name].partition(":")
-        value = getattr(lazy_module(mod), attr) if attr else lazy_module(mod)
-        globals()[name] = value
-        return value
-
-    return __getattr__
+    return dumps_json(value, sort_keys=True)
 
 
 __all__ = [
     "Clock",
     "SystemClock",
     "dumps",
-    "import_string",
-    "lazy_exports",
-    "lazy_module",
     "loads",
     "normalize",
     "now",

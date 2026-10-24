@@ -32,7 +32,9 @@ if __package__ in (None, ""):  # 允许 python app/cli.py 直接运行
 
 import httpx
 
-ALLOWED_SUFFIXES = {".txt", ".pdf", ".md", ".markdown", ".csv", ".json", ".log"}
+from app.shared.files import SUPPORTED_UPLOAD_SUFFIXES
+
+ALLOWED_SUFFIXES = SUPPORTED_UPLOAD_SUFFIXES
 
 
 def _bool(value: Any) -> bool:
@@ -141,45 +143,28 @@ def _doctor(args: argparse.Namespace) -> None:
     )
 
     async def checks() -> None:
-        # PostgreSQL
+        from app.infrastructure.health.probes import (
+            probe_milvus,
+            probe_postgres,
+            probe_redis,
+        )
+
+        # PostgreSQL / Redis / Milvus 复用 API 健康矩阵探测逻辑
         try:
-            from app.infrastructure.database.session import init_engine
-
-            engine = init_engine(settings.database_url)
-            from sqlalchemy import text
-
-            async with engine.begin() as conn:
-                _ = await conn.execute(text("SELECT 1"))
-            await engine.dispose()
+            await probe_postgres(settings)
             record("PostgreSQL", True, "连接正常")
         except Exception as exc:  # noqa: BLE001
             record("PostgreSQL", False, str(exc)[:100])
 
-        # Redis
         try:
-            import redis.asyncio as aioredis
-
-            client: Any = aioredis.Redis.from_url(
-                settings.redis_url, socket_connect_timeout=3
-            )
-            _ = await client.ping()
-            await client.aclose()
+            await probe_redis(settings)
             record("Redis", True, settings.redis_url)
         except Exception as exc:  # noqa: BLE001
             record("Redis", False, str(exc)[:100])
 
-        # Milvus（pymilvus 无类型存根，调用点显式忽略类型检查）
         try:
-            from pymilvus import connections, utility
-
-            connections.connect(
-                alias="doctor",
-                host=settings.milvus_host,
-                port=str(settings.milvus_port),
-            )
-            names: Any = utility.list_collections(using="doctor")
-            connections.disconnect("doctor")
-            record("Milvus", True, f"{len(names)} 个集合")
+            count = await probe_milvus(settings)
+            record("Milvus", True, f"{count} 个集合")
         except Exception as exc:  # noqa: BLE001
             record("Milvus", False, str(exc)[:100])
 

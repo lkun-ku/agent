@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.document import _is_supported, _sanitize_filename
 from app.infrastructure.database.session import get_async_session
 from app.main import app
+from app.shared.files import is_supported_upload, sanitize_filename
 
 
 class _FakeSession:
@@ -68,11 +68,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     ],
 )
 def test_sanitize_filename(raw: str | None, expected: str) -> None:
-    assert _sanitize_filename(raw) == expected
+    assert sanitize_filename(raw) == expected
 
 
 def test_sanitize_filename_truncates() -> None:
-    assert len(_sanitize_filename("x" * 500)) == 200
+    assert len(sanitize_filename("x" * 500)) == 200
 
 
 @pytest.mark.parametrize(
@@ -88,7 +88,7 @@ def test_sanitize_filename_truncates() -> None:
     ],
 )
 def test_is_supported(name: str, mime: str | None, supported: bool) -> None:
-    assert _is_supported(name, mime) is supported
+    assert is_supported_upload(name, mime) is supported
 
 
 def test_upload_rejects_unsupported_type(client: TestClient) -> None:

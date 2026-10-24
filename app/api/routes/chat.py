@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import uuid
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -18,6 +16,8 @@ from app.core.intent.recognizer import IntentRecognizer
 from app.infrastructure.llm.model_router import build_thinking_extra
 from app.infrastructure.trace.tracer import Tracer
 from app.models.schemas import ChatRequest, ChatResponse
+from app.shared.hashing import uuid4_str
+from app.shared.http import encode_sse_done, encode_sse_event
 
 router = APIRouter(tags=["chat"])
 
@@ -27,7 +27,7 @@ _chat_service = ChatApplicationService(Tracer(), IntentRecognizer())
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     """非流式对话：HTTP 层只负责协议与错误转换。"""
-    trace_id = str(uuid.uuid4())
+    trace_id = uuid4_str()
     span = _chat_service.tracer.start_trace(trace_id, "chat")
     try:
         return await _chat_service.run_chat(request, trace_id=trace_id, span=span)
@@ -61,7 +61,7 @@ async def _stream_generator(
             conversation_id,
             query,
             ChatResponse(
-                id=str(uuid.uuid4()),
+                id=uuid4_str(),
                 model=mode,
                 content=content,
                 trace_id=trace_id,
@@ -82,13 +82,12 @@ async def _stream_generator(
             "tool_result": refund_result.model_dump(mode="json"),
         }
         await persist(refund_result.reply, "refund_tool")
-        yield b"data: " + json.dumps(refund_payload, ensure_ascii=False).encode() + b"\n\n"
-        yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
+        yield encode_sse_event(refund_payload)
+        yield encode_sse_done()
         return
 
     if not settings.openai_api_key:
-        err = json.dumps({"error": "未配置 API Key"}, ensure_ascii=False).encode()
-        yield b"data: " + err + b"\n\n"
+        yield encode_sse_event({"error": "未配置 API Key"})
         return
 
     rag_response = await _chat_service.try_rag(query, messages)
@@ -101,8 +100,8 @@ async def _stream_generator(
             "citations": [c.model_dump(mode="json") for c in rag_response.citations],
         }
         await persist(rag_response.answer, "rag")
-        yield b"data: " + json.dumps(rag_payload, ensure_ascii=False).encode() + b"\n\n"
-        yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
+        yield encode_sse_event(rag_payload)
+        yield encode_sse_done()
         return
 
     thinking_params = {
@@ -124,8 +123,8 @@ async def _stream_generator(
         )
     except Exception as exc:
         error_payload = {"error": f"模型调用失败: {exc!s}", "trace_id": trace_id}
-        yield b"data: " + json.dumps(error_payload, ensure_ascii=False).encode() + b"\n\n"
-        yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
+        yield encode_sse_event(error_payload)
+        yield encode_sse_done()
         return
 
     full_content_parts: list[str] = []
@@ -134,17 +133,17 @@ async def _stream_generator(
         if delta:
             full_content_parts.append(delta)
             payload = {"content": delta, "trace_id": trace_id}
-            yield b"data: " + json.dumps(payload, ensure_ascii=False).encode() + b"\n\n"
+            yield encode_sse_event(payload)
     full_content = "".join(full_content_parts)
     if full_content:
         await persist(full_content, "llm_stream")
-    yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
+    yield encode_sse_done()
 
 
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     """流式输出（Server-Sent Events 兼容格式）。"""
-    trace_id = str(uuid.uuid4())
+    trace_id = uuid4_str()
     conversation_id = _chat_service.canonical_conversation_id(
         request.conversation_id or trace_id
     )

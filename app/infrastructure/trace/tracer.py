@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
+
+from app.shared.hashing import uuid4_str
 
 
 @dataclass
@@ -53,7 +54,7 @@ class Tracer:
                 self._trim_locked()
 
             span = TraceSpan(
-                span_id=str(uuid.uuid4()),
+                span_id=uuid4_str(),
                 trace_id=trace_id,
                 operation=operation,
                 parent_span_id=None,
@@ -80,7 +81,7 @@ class Tracer:
 
             parent = parent_span_id or self._current_parent.get(trace_id)
             span = TraceSpan(
-                span_id=str(uuid.uuid4()),
+                span_id=uuid4_str(),
                 trace_id=trace_id,
                 operation=operation,
                 parent_span_id=parent,

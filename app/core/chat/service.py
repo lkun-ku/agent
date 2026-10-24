@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import time
-import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -39,6 +36,8 @@ from app.infrastructure.observability.metrics import (
 )
 from app.infrastructure.trace.tracer import Tracer, TraceSpan
 from app.models.schemas import ChatRequest, ChatResponse, Citation, RAGResponse
+from app.shared.hashing import sha256_text, uuid4_str
+from app.shared.jsonx import dumps_json, loads_json
 
 if TYPE_CHECKING:
     from app.core.tools.refund import RefundTool
@@ -227,7 +226,7 @@ class ChatApplicationService:
         cache_hit: bool = False,
     ) -> ChatResponse:
         return ChatResponse(
-            id=str(uuid.uuid4()),
+            id=uuid4_str(),
             model=model,
             content=content,
             trace_id=trace_id,
@@ -345,8 +344,8 @@ class ChatApplicationService:
             "collection": settings.rag_collection_name,
             "retrieval_mode": settings.rag_retrieval_mode,
         }
-        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        raw = dumps_json(payload, sort_keys=True)
+        digest = sha256_text(raw)
         return f"rag:v1:{settings.rag_collection_name}:{digest}"
 
     async def get_cached_rag(self, key: str) -> dict[str, Any] | None:
@@ -355,7 +354,7 @@ class ChatApplicationService:
             return None
         try:
             raw = await get_redis_cache().get(key)
-            return json.loads(raw) if raw else None
+            return loads_json(raw) if raw else None
         except Exception as exc:  # noqa: BLE001
             logger.warning("读取 RAG 缓存失败: {}", exc)
             return None
@@ -372,7 +371,7 @@ class ChatApplicationService:
             }
             await get_redis_cache().set(
                 key,
-                json.dumps(payload, ensure_ascii=False),
+                dumps_json(payload),
                 ttl=settings.rag_cache_ttl_seconds,
             )
         except Exception as exc:  # noqa: BLE001

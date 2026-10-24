@@ -15,8 +15,10 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rag.ports import RAGIndexingPipeline
 from app.etl import ETLPipeline
 from app.infrastructure.database.models import Document, DocumentChunk
+from app.shared.hashing import deterministic_uuid
 
 
 @dataclass
@@ -41,7 +43,7 @@ class DocumentIndexingService:
 
     def __init__(
         self,
-        pipeline: Any | None,
+        pipeline: RAGIndexingPipeline | None,
         *,
         etl_pipeline: ETLPipeline | None = None,
     ) -> None:
@@ -75,7 +77,7 @@ class DocumentIndexingService:
             raise ValueError("未解析出文本内容")
 
         chunk_ids = [
-            str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{index}"))
+            deterministic_uuid(uuid.NAMESPACE_URL, f"{doc_id}:{index}")
             for index in range(len(etl.chunks))
         ]
         indexed = 0

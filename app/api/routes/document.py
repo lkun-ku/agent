@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -19,29 +17,12 @@ from app.core.rag.pipeline import get_pipeline
 from app.infrastructure.database.models import Document
 from app.infrastructure.database.session import get_async_session
 from app.models.schemas import DocumentInfo, DocumentUploadResponse
+from app.shared.files import is_supported_upload, sanitize_filename
+from app.shared.hashing import sha256_bytes, uuid4_str
 
 router = APIRouter(tags=["documents"])
 
-# 解析器当前仅支持纯文本与 PDF
-_ALLOWED_SUFFIXES = {".txt", ".pdf", ".md", ".markdown", ".csv", ".json", ".log"}
-
-
-def _sanitize_filename(raw: str | None) -> str:
-    """取文件名最后一段，防止 ``../`` 路径穿越与空文件名。"""
-    name = (raw or "").replace("\\", "/").split("/")[-1]
-    name = name.replace("\x00", "").strip()
-    if not name or name in {".", ".."}:
-        return "unnamed"
-    return name[:200]
-
-
-def _is_supported(name: str, mime: str | None) -> bool:
-    """后缀白名单或纯文本 MIME 视为支持。"""
-    if Path(name).suffix.lower() in _ALLOWED_SUFFIXES:
-        return True
-    return bool(mime and mime.startswith("text/") and mime != "text/html")
-
-
+# 解析器当前仅支持纯文本与 PDF；类型白名单与 CLI 复用同一配置。
 def _safe_unlink(path: Path) -> None:
     """尽量删除已落盘的临时文件，失败只记录日志。"""
     try:
@@ -74,10 +55,10 @@ async def upload_document(
     任一步失败都会清理已落盘文件并返回明确状态码。
     """
     settings = get_settings()
-    safe_name = _sanitize_filename(file.filename)
+    safe_name = sanitize_filename(file.filename)
     mime = file.content_type
 
-    if not _is_supported(safe_name, mime):
+    if not is_supported_upload(safe_name, mime):
         raise HTTPException(
             status_code=415,
             detail=f"不支持的文件类型: {safe_name}，仅支持 TXT / PDF / 纯文本类文件",
@@ -100,7 +81,7 @@ async def upload_document(
         )
 
     # 内容去重：同名且 sha256 一致的文档直接复用，避免重复入库产生冗余向量
-    digest = hashlib.sha256(raw).hexdigest()
+    digest = sha256_bytes(raw)
     existing = await _find_same_document(session, safe_name, digest)
     if existing is not None:
         meta = existing.meta or {}
@@ -114,7 +95,7 @@ async def upload_document(
         )
 
     upload_root = Path(settings.upload_dir)
-    doc_id = str(uuid.uuid4())
+    doc_id = uuid4_str()
     dest = upload_root / f"{doc_id}_{safe_name}"
 
     try:

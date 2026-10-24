@@ -20,6 +20,8 @@ from sqlalchemy import delete, select, text
 
 from app.config import get_settings
 from app.core.rag.indexing import DocumentIndexingService
+from app.core.rag.ports import RAGIndexingPipeline
+from app.shared.hashing import deterministic_uuid, sha256_bytes
 
 KNOWLEDGE_SUFFIXES = {".txt", ".pdf", ".md", ".markdown", ".csv", ".log"}
 
@@ -52,12 +54,6 @@ class SyncReport:
             f"新增 {len(self.added)} / 更新 {len(self.updated)} / "
             f"跳过 {len(self.skipped)} / 删除 {len(self.deleted)} / 错误 {len(self.errors)}"
         )
-
-
-def sha256_bytes(data: bytes) -> str:
-    import hashlib
-
-    return hashlib.sha256(data).hexdigest()
 
 
 def plan_sync(
@@ -272,7 +268,7 @@ async def _sync_knowledge_dir_body(
                 result = await indexing_service.index_bytes(
                     session,
                     content=path.read_bytes(),
-                    doc_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"knowledge:{rel}")),
+                    doc_id=deterministic_uuid(uuid.NAMESPACE_URL, f"knowledge:{rel}"),
                     filename=rel,
                     mime_type=_MIME_BY_SUFFIX.get(Path(rel).suffix.lower()),
                     storage_path=str(path),
@@ -338,7 +334,7 @@ async def _needs_backfill(
     return sorted(backfill)
 
 
-async def _get_pipeline_for_sync() -> Any:
+async def _get_pipeline_for_sync() -> RAGIndexingPipeline:
     from app.core.rag.pipeline import get_pipeline
 
     pipeline = await get_pipeline()
