@@ -40,11 +40,11 @@ async def probe_redis(settings: Settings) -> None:
 
 
 async def probe_milvus(settings: Settings) -> int:
-    """探测 Milvus 集合并返回实体数；集合缺失时抛出异常。"""
+    """探测 Milvus 与目标集合，返回当前别名下的集合数量。"""
     manager = create_milvus_manager(settings, alias="health")
     if not await manager.collection_exists(settings.rag_collection_name):
         raise RuntimeError("Milvus 集合不存在")
-    return await manager.collection_count(settings.rag_collection_name)
+    return len(await manager.list_collections())
 
 
 __all__ = ["probe_milvus", "probe_postgres", "probe_redis"]
