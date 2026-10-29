@@ -90,8 +90,11 @@ class MilvusManager:
     async def list_collections(self) -> list[str]:
         """列出当前连接别名下的全部集合名称。"""
         await self._ensure_connection()
-        result = await _run_sync(utility.list_collections, self._alias)
-        return [str(name) for name in result]
+
+        def _list() -> list[str]:
+            return [str(name) for name in utility.list_collections(using=self._alias)]
+
+        return await _run_sync(_list)
 
     async def collection_count(self, name: str) -> int:
         """返回集合中的实体数；集合不存在时返回 0（用于判断是否需要回填）。"""
