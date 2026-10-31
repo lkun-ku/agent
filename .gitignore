@@ -24,6 +24,9 @@ logs/
 # 本地模型目录：通过 compose 挂载，不纳入仓库
 models/
 
+# 本机/企业 TLS 证书包：公共 CA 可提交；如包含企业私有根证书请勿提交
+certs/
+
 # IDE
 .idea/
 .vscode/

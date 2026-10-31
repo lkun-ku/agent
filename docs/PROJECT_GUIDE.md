@@ -652,6 +652,57 @@ python -c "import asyncio; from app.core.tools import get_tool_registry; print(a
 
 ## 8. 部署流程
 
+### 8.0 容器访问外部 HTTPS / DeepSeek
+
+如果容器内出现：
+
+```text
+CERTIFICATE_VERIFY_FAILED: certificate verify failed: unable to get local issuer certificate
+```
+
+说明容器缺企业代理/本机信任链根证书。不要关闭 TLS 校验，按下面步骤修复：
+
+1. 确认 Windows 浏览器能打开 `https://api.deepseek.com`。
+2. 导出 Windows 受信任根证书：
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/export_windows_ca.ps1
+   ```
+
+3. 确认生成 `certs/ca-bundle.pem`。
+4. `docker-compose.yml` 中应用服务已包含：
+
+   ```yaml
+   environment:
+     SSL_CERT_FILE: /app/certs/ca-bundle.pem
+     REQUESTS_CA_BUNDLE: /app/certs/ca-bundle.pem
+   volumes:
+     - ./certs/ca-bundle.pem:/app/certs/ca-bundle.pem:ro
+   ```
+
+5. 重启应用容器：
+
+   ```powershell
+   docker compose up -d --force-recreate app
+   ```
+
+6. 验证容器可访问 DeepSeek：
+
+   ```powershell
+   docker compose exec -T app python -c "import urllib.request; print(urllib.request.urlopen('https://api.deepseek.com', timeout=15).status)"
+   ```
+
+   未带 API Key 返回 `401` 是正常的，说明 TLS 已通。
+7. 再测试完整 RAG / LLM 问答。
+
+如果日志变为：
+
+```text
+Error code: 402 - Insufficient Balance
+```
+
+说明 TLS 已经修复，当前失败原因是 DeepSeek 账户余额不足。需要充值、更换可用模型，或更换有效 API Key。
+
 ### 8.1 构建与启动
 
 ```bash

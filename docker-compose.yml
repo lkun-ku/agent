@@ -44,6 +44,9 @@ services:
       PAYMENT_GATEWAY_URL: ${PAYMENT_GATEWAY_URL:-}
       PAYMENT_GATEWAY_TOKEN: ${PAYMENT_GATEWAY_TOKEN:-}
       PAYMENT_GATEWAY_TIMEOUT: ${PAYMENT_GATEWAY_TIMEOUT:-5.0}
+      # Windows/企业代理根证书包；由 certs/ca-bundle.pem 提供。
+      SSL_CERT_FILE: /app/certs/ca-bundle.pem
+      REQUESTS_CA_BUNDLE: /app/certs/ca-bundle.pem
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-models/bge-large-zh-v1.5}
       EMBEDDING_LOCAL_ONLY: ${EMBEDDING_LOCAL_ONLY:-true}
       RERANKER_MODEL: ${RERANKER_MODEL:-models/bge-reranker-v2-m3}
@@ -55,6 +58,7 @@ services:
       - ./app:/app/app
       - ./models:/app/models:ro
       - ./knowledge:/app/knowledge:ro
+      - ./certs/ca-bundle.pem:/app/certs/ca-bundle.pem:ro
     depends_on:
       postgres:
         condition: service_healthy
