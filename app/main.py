@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Request, Response
 from loguru import logger
 
-from app.api.routes import chat, document, health, web
+from app.api.routes import chat, document, health, refund_ops, web
 from app.cli import main
 from app.config import get_settings
 from app.core.tools import get_tool_registry
@@ -161,6 +161,15 @@ def create_app() -> FastAPI:
     application.include_router(
         document.router,
         prefix=settings.api_prefix,
+        dependencies=[Depends(require_api_key)],
+    )
+    application.include_router(
+        refund_ops.router,
+        prefix=settings.api_prefix,
+        dependencies=[Depends(require_api_key)],
+    )
+    application.include_router(
+        refund_ops.page_router,
         dependencies=[Depends(require_api_key)],
     )
     # 根路径页面（首页 / 聊天演示）不挂 API 前缀

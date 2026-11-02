@@ -283,9 +283,14 @@ python main.py serve
 | POST | `/api/v1/documents/sync-knowledge` | 扫描 `knowledge/` 增量同步/清理 | PostgreSQL + Milvus |
 | POST | `/api/v1/chat` | 统一对话入口；自动路由退款工具 / Orchestrator / RAG / LLM | RAG 需 DeepSeek/Milvus；缓存与持久化需 Redis/PG；退款工具无需 LLM |
 | POST | `/api/v1/chat/stream` | SSE 流式对话；命中退款时整段返回 | 同上 |
+| POST | `/api/v1/refunds` | 退款运营接口：提交订单快照/refund_id/order_id，返回自动化结果与 CaseView | PostgreSQL |
+| GET | `/api/v1/refunds/{case_id}` | 查询退款状态、金额、规则命中、风险等级 | PostgreSQL |
+| GET | `/api/v1/refunds/tasks` | 查看人工审核/纠纷/举证任务 | PostgreSQL |
+| GET | `/api/v1/refunds/templates` | 查看退款测试场景模板 | 数据文件 |
+| GET | `/ops/refunds` | 退款运营后台页面 | PostgreSQL |
 | GET | `/`、`/ui`、`/docs`、`/diag` | 内嵌页面/离线 API 文档/诊断页 | 服务本身 |
 
-**没有** `/api/v1/refund/*` 独立退款路由；退款只通过 `/chat` 的意图识别进入 `refund` 工具。
+退款仍通过 `/chat` 的意图识别进入 `refund` 工具；`/api/v1/refunds` 是运营后台/测试接口，用于直接提交订单快照并查看内部处理细节。
 
 #### 4.6.2 CLI 功能地图
 
@@ -346,6 +351,9 @@ $body = @{
 } | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri http://127.0.0.1:8000/api/v1/chat `
   -Method Post -ContentType "application/json" -Body $body
+
+# 7. 打开退款运营后台
+Invoke-WebRequest http://127.0.0.1:8000/ops/refunds
 ```
 
 预期：
@@ -397,9 +405,21 @@ REFUND_SEED_DATASET=false
 ### 5.1 应用入口与生命周期
 
 - 入口：`app/main.py`
-- `create_app()`：注册 health/chat/document/web 路由；退款**不注册独立路由**。
+- `create_app()`：注册 health/chat/document/refund-ops/web 路由。
 - `lifespan`：初始化 SQLAlchemy 引擎、会话工厂、知识库自动扫描、`ToolRegistry`；关闭时释放工具连接池、Redis 缓存和数据库引擎。
 - 启动命令：`python main.py serve`（`main.py` 是 CLI 的薄入口）。
+
+### 5.1.1 退款运营后台
+
+- 文件：`app/api/routes/refund_ops.py`、`app/static/refund-admin.html`
+- 页面：`http://127.0.0.1:8000/ops/refunds`
+- 接口：
+  - `POST /api/v1/refunds`：提交完整订单快照或已有 refund_id/order_id；
+  - `GET /api/v1/refunds/{case_id}`：查看 CaseView、规则命中、风险等级；
+  - `GET /api/v1/refunds/tasks`：查看人工任务；
+  - `GET /api/v1/refunds/templates`：加载 `data/refund` 测试场景。
+- 复用 `RefundTool` 内的进程级 `AgentService` 和 PostgreSQL 连接池。
+- 该接口属于运营/测试后台，生产需由网关加 RBAC，或在 `API_AUTH_ENABLED=true` 下保护。
 
 ### 5.2 对话入口
 
@@ -601,7 +621,7 @@ python -m pytest -q tests/refund
 python -m pytest -q -m integration
 ```
 
-当前基线：`143 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `66%`。
+当前基线：`149 passed`，其中退款相关 12 条；`ruff` 与 `mypy --strict` 通过；应用覆盖率约 `66%`。
 
 测试目录：
 

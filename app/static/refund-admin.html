@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>退款运营后台 · 企业级 AI Agent</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  line-height:1.6}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1200px;margin:0 auto;padding:32px 24px 64px}
+h1{font-size:26px;margin:0 0 6px}
+.sub{color:#8b949e;margin:0 0 24px;font-size:14px}
+.grid{display:grid;grid-template-columns:420px 1fr;gap:16px;align-items:start}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px;color:#e6edf3}
+label{display:block;font-size:12.5px;color:#8b949e;margin:10px 0 5px}
+input,textarea,select{width:100%;background:#0d1117;color:#e6edf3;border:1px solid #30363d;
+  border-radius:8px;padding:9px 11px;font:inherit;font-size:13px}
+textarea{min-height:260px;font-family:ui-monospace,Consolas,monospace;white-space:pre}
+button{background:#238636;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer}
+button.secondary{background:#21262d;color:#e6edf3;border:1px solid #30363d}
+button:disabled{opacity:.55;cursor:not-allowed}
+.row{display:flex;gap:8px}
+.muted{color:#8b949e;font-size:12.5px}
+pre{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;overflow:auto;
+  font-size:12.5px;max-height:440px;white-space:pre-wrap}
+.kv{display:grid;grid-template-columns:140px 1fr;gap:6px 12px;font-size:13px}
+.kv b{color:#8b949e;font-weight:500}
+.badge{display:inline-block;border:1px solid #30363d;border-radius:999px;padding:2px 9px;font-size:12px;color:#8b949e}
+.ok{color:#3fb950}.warn{color:#d29922}.bad{color:#f85149}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 9px;border-bottom:1px solid #21262d;vertical-align:top}
+th{color:#8b949e;font-weight:500}
+.error{background:#21262d;border-left:3px solid #f85149;padding:10px 12px;color:#f85149;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <h1>退款运营后台</h1>
+      <p class="sub">提交退款订单快照，实时查看自动化判定、金额、规则命中、状态流转与人工任务</p>
+    </div>
+    <a href="/">返回总览</a>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>提交退款订单</h2>
+        <label>API Key（本地 API_AUTH_ENABLED=false 时可留空）</label>
+        <input id="api-key" type="password" placeholder="X-API-Key">
+        <label>测试场景</label>
+        <select id="scenario"><option value="">加载中…</option></select>
+        <div class="row" style="margin-top:10px">
+          <button class="secondary" id="fill">填入完整订单 JSON</button>
+          <button class="secondary" id="load-tasks">刷新任务</button>
+        </div>
+        <label>退款订单 JSON / 或只填 refund_id、order_id</label>
+        <textarea id="payload" spellcheck="false">{}</textarea>
+        <div class="row" style="margin-top:10px">
+          <button id="submit">执行自动化退款</button>
+          <button class="secondary" id="query">按售后单号查询</button>
+        </div>
+        <label>售后单号 case_id（查询用）</label>
+        <input id="case-id" placeholder="例如 R202611140000014">
+        <p class="muted">接口：<code>POST /api/v1/refunds</code> · 状态：<code id="status">ready</code></p>
+        <div id="submit-error"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>自动化处理结果</h2>
+        <div id="result"><span class="muted">提交订单后显示结果。</span></div>
+      </div>
+      <div class="card">
+        <h2>人工任务队列</h2>
+        <div id="tasks"><span class="muted">点击“刷新任务”加载。</span></div>
+      </div>
+      <div class="card">
+        <h2>全局统计</h2>
+        <div id="stats"><span class="muted">暂无数据。</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const apiBase = '/api/v1/refunds';
+
+function headers() {
+  const key = $('api-key').value.trim();
+  const h = { 'Content-Type': 'application/json' };
+  if (key) h['X-API-Key'] = key;
+  return h;
+}
+
+function setStatus(text) { $('status').textContent = text; }
+function showError(message) {
+  $('submit-error').innerHTML = message ? `<div class="error">${message}</div>` : '';
+}
+function pretty(value) {
+  return JSON.stringify(value, null, 2);
+}
+function badge(value, cls) {
+  return value ? `<span class="badge ${cls || ''}">${value}</span>` : '';
+}
+function renderStats(stats) {
+  if (!stats) return;
+  $('stats').innerHTML = `<pre>${pretty(stats)}</pre>`;
+}
+function renderTasks(data) {
+  const tasks = data.tasks || [];
+  if (!tasks.length) {
+    $('tasks').innerHTML = '<span class="muted">当前没有待人工处理任务。</span>';
+    return;
+  }
+  const rows = tasks.map(task => `
+    <tr>
+      <td>${task.case_id || ''}</td>
+      <td>${task.queue_label || task.queue || ''}</td>
+      <td>${task.reason_label || task.reason || ''}</td>
+      <td>${Number(task.amount || 0).toFixed(2)}</td>
+      <td>${task.action || ''}</td>
+    </tr>
+  `).join('');
+  $('tasks').innerHTML = `
+    <table><thead><tr><th>Case</th><th>队列</th><th>原因</th><th>金额</th><th>动作</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+function renderCase(caseView) {
+  if (!caseView) return '';
+  const pending = caseView.pending ? JSON.stringify(caseView.pending) : '无';
+  return `
+    <div class="kv">
+      <b>售后单号</b><span>${caseView.return_id || '-'}</span>
+      <b>业务状态</b><span>${caseView.status || '-'} ${badge(caseView.status_label)}</span>
+      <b>动作码</b><span>${caseView.action_code || '-'}</span>
+      <b>动作</b><span>${caseView.action_label || '-'}</span>
+      <b>处理金额</b><span>${Number(caseView.amount || 0).toFixed(2)}</span>
+      <b>规则命中</b><span>${(caseView.rule_hits || []).join(', ') || '无'}</span>
+      <b>风险等级</b><span>${caseView.risk_tier || '-'}</span>
+      <b>信任分</b><span>${caseView.trust_score ?? '-'}</span>
+      <b>原因</b><span>${caseView.reason_label || caseView.reason || '-'}</span>
+      <b>队列</b><span>${caseView.queue_label || caseView.queue || '-'}</span>
+      <b>人工任务</b><span>${pending}</span>
+      <b>可用操作</b><span>${(caseView.actions || []).join(', ') || '无'}</span>
+      <b>回复</b><span>${caseView.reply || '-'}</span>
+    </div>`;
+}
+function renderSubmission(data) {
+  const response = data.response;
+  const caseView = data.case;
+  const status = response?.status;
+  const cls = status === 'auto_completed' || status === 'completed' ? 'ok'
+    : status === 'rejected' ? 'bad' : 'warn';
+  $('result').innerHTML = `
+    <div class="kv" style="margin-bottom:12px">
+      <b>处理状态</b><span>${status || '-'} ${badge(response?.status, cls)}</span>
+      <b>动作</b><span>${response?.action_label || response?.action || '-'}</span>
+      <b>金额</b><span>${Number(response?.amount || 0).toFixed(2)}</span>
+      <b>回复</b><span>${response?.reply || '-'}</span>
+      <b>是否转人工</b><span>${response?.handoff?.to_human ? '是' : '否'}</span>
+      <b>Case</b><span>${response?.case_id || '-'}</span>
+    </div>
+    ${renderCase(caseView)}
+    <pre>${pretty(data)}</pre>`;
+  renderStats(data.stats);
+}
+async function loadScenarios() {
+  setStatus('loading templates');
+  const response = await fetch(`${apiBase}/templates`, { headers: headers() });
+  const data = await response.json();
+  const select = $('scenario');
+  select.innerHTML = '<option value="">选择场景（可选）</option>';
+  (data.templates || []).forEach(item => {
+    const option = document.createElement('option');
+    option.value = String(item.record ? JSON.stringify(item.record) : '');
+    option.textContent = `${item.scenario} · ${item.scenario_name} · ${item.expected_action}`;
+    select.appendChild(option);
+  });
+  setStatus('ready');
+}
+async function submitRefund() {
+  showError('');
+  let payload;
+  try { payload = JSON.parse($('payload').value || '{}'); }
+  catch (error) { showError('JSON 格式错误：' + error.message); return; }
+
+  setStatus('processing');
+  $('submit').disabled = true;
+  try {
+    const response = await fetch(apiBase, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      showError(data.detail ? String(data.detail) : `HTTP ${response.status}`);
+      return;
+    }
+    renderSubmission(data);
+    const tasksResponse = await fetch(`${apiBase}/tasks`, { headers: headers() });
+    renderTasks(await tasksResponse.json());
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    $('submit').disabled = false;
+    setStatus('ready');
+  }
+}
+async function queryCase() {
+  const caseId = $('case-id').value.trim();
+  if (!caseId) { showError('请输入售后单号'); return; }
+  setStatus('querying');
+  try {
+    const response = await fetch(`${apiBase}/${encodeURIComponent(caseId)}`, { headers: headers() });
+    const data = await response.json();
+    if (!response.ok) { showError(data.detail ? String(data.detail) : `HTTP ${response.status}`); return; }
+    renderSubmission({ ...data, response: null });
+  } catch (error) {
+    showError(error.message);
+  } finally { setStatus('ready'); }
+}
+async function loadTasks() {
+  setStatus('loading tasks');
+  const response = await fetch(`${apiBase}/tasks`, { headers: headers() });
+  const data = await response.json();
+  if (!response.ok) { showError(data.detail ? String(data.detail) : `HTTP ${response.status}`); return; }
+  renderTasks(data);
+  renderStats(data.stats);
+  setStatus('ready');
+}
+
+$('scenario').addEventListener('change', () => {
+  const value = $('scenario').value;
+  if (value) $('payload').value = JSON.stringify(JSON.parse(value), null, 2);
+});
+$('fill').addEventListener('click', () => {
+  const value = $('scenario').value;
+  if (value) $('payload').value = JSON.stringify(JSON.parse(value), null, 2);
+});
+$('submit').addEventListener('click', submitRefund);
+$('query').addEventListener('click', queryCase);
+$('load-tasks').addEventListener('click', loadTasks);
+loadScenarios().catch(error => showError(error.message));
+</script>
+</body>
+</html>

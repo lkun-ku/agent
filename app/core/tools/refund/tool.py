@@ -84,6 +84,10 @@ class RefundTool(BaseTool):
                     self._service = self._service_factory()
         return self._service
 
+    def get_service(self) -> AgentService:
+        """返回进程级退款应用服务，供运营后台复用同一连接池。"""
+        return self._get_service()
+
     async def execute(self, **kwargs: Any) -> RefundToolResult:
         raw_order = kwargs.get("order_id")
         raw_refund = kwargs.get("refund_id")
