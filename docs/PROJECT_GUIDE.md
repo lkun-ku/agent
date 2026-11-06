@@ -513,8 +513,6 @@ REFUND_SEED_DATASET=false
 
 ### 5.8 通用 Agent / 会话记忆
 
-### 5.8 通用 Agent / 会话记忆
-
 - `app/core/agent/`：仅保留生产使用的 `AgentOrchestrator` 与 `ReActAgent`。
 - `app/api/routes/chat.py`：任务类意图在 `AGENT_ORCHESTRATOR_ENABLED=true` 时进入 ReAct。
 - 未接线的 memory、Planner、Reflection、MultiRetriever 与 Redis 语义缓存已删除，避免概念重复。
