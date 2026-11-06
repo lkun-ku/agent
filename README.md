@@ -7,7 +7,8 @@
 1. **知识库问答**：文档上传/目录同步 → 解析分块 → 向量检索 → 带引用回答。
 2. **退款工具**：`/chat` 识别退款意图后，通过 `ToolRegistry` 调用 `refund` 工具；退款不是独立系统，没有独立 `/refund/*` API。
 
-完整的模块、架构、测试、部署与回滚说明见 **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**。
+完整的模块、架构、测试、部署与回滚说明见 **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**。  
+独立的架构、功能链路与评测现状说明见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
 
 ## 快速开始
 
